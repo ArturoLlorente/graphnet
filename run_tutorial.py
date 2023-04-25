@@ -26,7 +26,7 @@ dataloaders = DataLoader.from_dataset_config(
 model.fit(
     dataloaders["train"],
     dataloaders["validation"],
-    max_epochs=100,
+    max_epochs=2,
 )
 
 # Predict on test set and return as pandas.DataFrame

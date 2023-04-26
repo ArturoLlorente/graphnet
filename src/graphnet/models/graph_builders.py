@@ -1,6 +1,7 @@
 """Class(es) for building/connecting graphs."""
 
 from typing import List
+import random
 
 import torch
 from torch_geometric.nn import knn_graph, radius_graph
@@ -162,6 +163,58 @@ class EuclideanGraphBuilder(
 
         return data
 
+
+class KNNGraphBuilderMulti(GraphBuilder):  # pylint: disable=too-few-public-methods
+    """Implementation of the graph builder used in the TITO solution for the 
+    Kaggle competition "Icecube - Neutrinos in Deep Ice" ended on 20.04.2023.
+    """
+
+    @save_model_config
+    def __init__(
+        self,
+        nb_nearest_neighbours,
+        columns,
+    ):
+        """Construct `KNNGraphBuilder`."""
+        # Base class constructor
+        super().__init__()
+
+        # Member variable(s)
+        assert len(nb_nearest_neighbours) == len(columns)
+        self._nb_nearest_neighbours = nb_nearest_neighbours
+        self._columns = columns
+
+    def forward(self, data: Data) -> Data:
+        """Forward pass."""
+        # Constructs the adjacency matrix from the raw, DOM-level data and
+        # returns this matrix
+        
+        if data.edge_index is not None:
+            self.info(
+                "WARNING: GraphBuilder received graph with pre-existing "
+                "structure. Will overwrite."
+            )
+        edge_index_list = []
+        x = data.x
+        TIME_PARAM_FOR_DIST = 1/10
+        x[:,3] = x[:,3]*TIME_PARAM_FOR_DIST
+        for idx in range(len(self._nb_nearest_neighbours)):
+            nb_nearest_neighbour = self._nb_nearest_neighbours[idx]
+            if type(nb_nearest_neighbour) == str:
+                nb_nearest_neighbour_min, nb_nearest_neighbour_max = nb_nearest_neighbour.split('-')
+                nb_nearest_neighbour = torch.randint(int(nb_nearest_neighbour_min), int(nb_nearest_neighbour_max), (1,))[0]
+            elif type(nb_nearest_neighbour) == list:
+                nb_nearest_neighbour = random.choice(nb_nearest_neighbour)
+            edge_index = knn_graph(
+                x[:, self._columns[idx]]/1000,
+                nb_nearest_neighbour,
+                data.batch,
+            ).to(self.device)
+            edge_index_list.append(edge_index)
+        x[:,3] = x[:,3]/TIME_PARAM_FOR_DIST
+
+        data.edge_index = edge_index_list
+        return data
 
 # class MinkowskiGraphBuilder(GraphBuilder):
 #    ...

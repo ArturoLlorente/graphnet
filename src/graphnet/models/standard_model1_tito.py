@@ -19,7 +19,8 @@ from graphnet.models.task import Task
 
 
 class StandardModel2(Model):
-    """Implementation of the model used in the TITO solution for the 
+    """Implementation of the model used in the TITO solution for the.
+
     Kaggle competition "Icecube - Neutrinos in Deep Ice" ended on 20.04.2023.
     """
 
@@ -118,13 +119,12 @@ class StandardModel2(Model):
         preds = self(batch)
         vlosses = self._task[1].compute_loss(preds[1], batch)
         vloss = torch.sum(vlosses)
-        
+
         tlosses = self._task[0].compute_loss(preds[0], batch)
         tloss = torch.sum(tlosses)
-        
+
         loss = vloss + tloss
         return {"loss": loss, "vloss": vloss, "tloss": tloss}
-    
 
     def training_step(self, train_batch: Data, batch_idx: int) -> Tensor:
         """Perform training step."""

@@ -65,17 +65,18 @@ class DynEdgeConv(EdgeConv, LightningModule):
         ).to(self.device)
 
         return x, edge_index
-    
-class EdgeConv0(MessagePassing, LightningModule): # Same as EdgeConv with the new operation EdgeConv0
-    r"""Implementation of the layer EdgeConv0 used in the TITO solution for the 
+
+
+class EdgeConv0(
+    MessagePassing, LightningModule
+):  # Same as EdgeConv with the new operation EdgeConv0
+    r"""Implementation of the layer EdgeConv0 used in the TITO solution for the.
+
     Kaggle competition "Icecube - Neutrinos in Deep Ice" ended on 20.04.2023.
     """
-    def __init__(
-        self, nn: Callable, 
-        aggr: str = 'max',
-         **kwargs
-    ):
-        
+
+    def __init__(self, nn: Callable, aggr: str = "max", **kwargs):
+
         super().__init__(aggr=aggr, **kwargs)
         self.nn = nn
         self.reset_parameters()
@@ -83,9 +84,7 @@ class EdgeConv0(MessagePassing, LightningModule): # Same as EdgeConv with the ne
     def reset_parameters(self):
         reset(self.nn)
 
-    def forward(
-        self, x: Union[Tensor, PairTensor], edge_index: Adj
-    ) -> Tensor:
+    def forward(self, x: Union[Tensor, PairTensor], edge_index: Adj) -> Tensor:
         """"""
         if isinstance(x, Tensor):
             x: PairTensor = (x, x)
@@ -93,25 +92,28 @@ class EdgeConv0(MessagePassing, LightningModule): # Same as EdgeConv with the ne
         return self.propagate(edge_index, x=x, size=None)
 
     def message(self, x_i: Tensor, x_j: Tensor) -> Tensor:
-        return self.nn(torch.cat([x_i, x_j - x_i, x_j], dim=-1)) ##edgeConv0
+        return self.nn(torch.cat([x_i, x_j - x_i, x_j], dim=-1))  # edgeConv0
 
     def __repr__(self) -> str:
-        return f'{self.__class__.__name__}(nn={self.nn})'
-        
-        
+        return f"{self.__class__.__name__}(nn={self.nn})"
 
 
-class EdgeConv1(MessagePassing, LightningModule): # Same as EdgeConv with the new operation EdgeConv1
-    r"""Implementation of the layer EdgeConv1 used in the TITO solution for the 
+class EdgeConv1(
+    MessagePassing, LightningModule
+):  # Same as EdgeConv with the new operation EdgeConv1
+    r"""Implementation of the layer EdgeConv1 used in the TITO solution for the.
+
     Kaggle competition "Icecube - Neutrinos in Deep Ice" ended on 20.04.2023.
     """
+
     def __init__(
-        self, nn: Callable, 
-        aggr: str = 'max',
+        self,
+        nn: Callable,
+        aggr: str = "max",
         node_edge_feat_ratio: float = 0.7,
-        **kwargs
+        **kwargs,
     ):
-        
+
         super().__init__(aggr=aggr, **kwargs)
         self.nn = nn
         self.reset_parameters()
@@ -120,9 +122,7 @@ class EdgeConv1(MessagePassing, LightningModule): # Same as EdgeConv with the ne
     def reset_parameters(self):
         reset(self.nn)
 
-    def forward(
-        self, x: Union[Tensor, PairTensor], edge_index: Adj
-    ) -> Tensor:
+    def forward(self, x: Union[Tensor, PairTensor], edge_index: Adj) -> Tensor:
         """"""
         if isinstance(x, Tensor):
             x: PairTensor = (x, x)
@@ -130,23 +130,26 @@ class EdgeConv1(MessagePassing, LightningModule): # Same as EdgeConv with the ne
         return self.propagate(edge_index, x=x, size=None)
 
     def message(self, x_i: Tensor, x_j: Tensor) -> Tensor:
-        edge_cnt = round(x_i.shape[-1]*self.node_edge_fea_ratio)
+        edge_cnt = round(x_i.shape[-1] * self.node_edge_fea_ratio)
         if edge_cnt < 20:
-            edge_cnt = 4                   #TODO　通常edge素性の数は20以上、それより少ないときは最初のレイヤーなのでXYZTの4つ
-   # "Usually, the number of edge features is 20 or more, and when it is less than that, it is the first layer and has four attributes: XYZT." (ChatGPT)
-        edge_ij = torch.cat([(x_j - x_i)[:,:edge_cnt],x_j[:,edge_cnt:]], axis=-1)
-        return self.nn(torch.cat([x_i, edge_ij], dim=-1)) ##edgeConv1
+            edge_cnt = 4  # TODO　通常edge素性の数は20以上、それより少ないときは最初のレイヤーなのでXYZTの4つ
+        # "Usually, the number of edge features is 20 or more, and when it is less than that, it is the first layer and has four attributes: XYZT." (ChatGPT)
+        edge_ij = torch.cat(
+            [(x_j - x_i)[:, :edge_cnt], x_j[:, edge_cnt:]], axis=-1
+        )
+        return self.nn(torch.cat([x_i, edge_ij], dim=-1))  # edgeConv1
 
     def __repr__(self) -> str:
-        return f'{self.__class__.__name__}(nn={self.nn})'
-    
-    
+        return f"{self.__class__.__name__}(nn={self.nn})"
 
 
 class dynTrans1(EdgeConv0, LightningModule):
-    """Implementation of the transformer layer used in the TITO solution for the 
+    """Implementation of the transformer layer used in the TITO solution for
+    the.
+
     Kaggle competition "Icecube - Neutrinos in Deep Ice" ended on 20.04.2023.
     """
+
     def __init__(
         self,
         layer_sizes,
@@ -174,13 +177,13 @@ class dynTrans1(EdgeConv0, LightningModule):
         if features_subset is None:
             features_subset = slice(None)  # Use all features
         assert isinstance(features_subset, (list, slice))
-                
+
         layers = []
         for ix, (nb_in, nb_out) in enumerate(
             zip(layer_sizes[:-1], layer_sizes[1:])
         ):
             if ix == 0:
-                nb_in *= 3 # edgeConv1
+                nb_in *= 3  # edgeConv1
             layers.append(torch.nn.Linear(nb_in, nb_out))
             layers.append(torch.nn.LeakyReLU())
         d_model = nb_out
@@ -193,41 +196,41 @@ class dynTrans1(EdgeConv0, LightningModule):
         self.serial_connection = serial_connection
         self.use_trans_in_dyn1 = use_trans_in_dyn1
 
-        self.norm_first=False
-        
-        self.norm1 = LayerNorm(d_model, eps=1e-5) #lNorm
-        
+        self.norm_first = False
+
+        self.norm1 = LayerNorm(d_model, eps=1e-5)  # lNorm
+
         # Transformer layer(s)
         if use_trans_in_dyn1:
             encoder_layer = TransformerEncoderLayer(
-                                                    d_model=d_model, 
-                                                    nhead=8, 
-                                                    batch_first=True, 
-                                                    dropout=dropout, 
-                                                    norm_first=self.norm_first
-                                                    )
-            self._transformer_encoder = TransformerEncoder(encoder_layer, num_layers=1)        
-        
-        
+                d_model=d_model,
+                nhead=8,
+                batch_first=True,
+                dropout=dropout,
+                norm_first=self.norm_first,
+            )
+            self._transformer_encoder = TransformerEncoder(
+                encoder_layer, num_layers=1
+            )
 
     def forward(
         self, x: Tensor, edge_index: Adj, batch: Optional[Tensor] = None
     ) -> Tensor:
         """Forward pass."""
         # Standard EdgeConv forward pass
-        
+
         if self.norm_first:
-            x = self.norm1(x) # lNorm
-            
+            x = self.norm1(x)  # lNorm
+
         x_out = super().forward(x, edge_index)
-        
+
         if x_out.shape[-1] == x.shape[-1] and self.serial_connection:
             x = x + x_out
         else:
             x = x_out
-            
+
         if not self.norm_first:
-            x = self.norm1(x) # lNorm
+            x = self.norm1(x)  # lNorm
 
         # Recompute adjacency
         edge_index = None

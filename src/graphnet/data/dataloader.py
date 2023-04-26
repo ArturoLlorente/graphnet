@@ -17,16 +17,18 @@ def collate_fn(graphs: List[Data]) -> Batch:
     graphs = [g for g in graphs if g.n_pulses > 1]
     return Batch.from_data_list(graphs)
 
+
 def collate_fn_tito(graphs: List[Data], split_list=[0.8, 1.0]) -> list:
-    """Implementation of the solution used in the TITO solution for the 
+    """Implementation of the solution used in the TITO solution for the.
+
     Kaggle competition "Icecube - Neutrinos in Deep Ice" ended on 20.04.2023.
     """
     graphs = [g for g in graphs if g.n_pulses > 1]
     graphs.sort(key=lambda x: x.n_pulses)
     batch_list = []
-    for minp, maxp in zip([0]+split_list[:-1], split_list):
-        min_idx = int(minp*len(graphs))
-        max_idx = int(maxp*len(graphs))
+    for minp, maxp in zip([0] + split_list[:-1], split_list):
+        min_idx = int(minp * len(graphs))
+        max_idx = int(maxp * len(graphs))
         this_graphs = graphs[min_idx:max_idx]
         this_batch = Batch.from_data_list(this_graphs)
         batch_list.append(this_batch)

@@ -1,7 +1,9 @@
-"""Implementation of the DynEdge GNN model used in the TITO solution for the 
+"""Implementation of the DynEdge GNN model used in the TITO solution for the.
+
 Kaggle competition "Icecube - Neutrinos in Deep Ice" ended on 20.04.2023.
 
-Implemented by Arturo Llorente (ge52xiw@tum.de)"""
+Implemented by Arturo Llorente (ge52xiw@tum.de)
+"""
 
 from typing import List, Optional, Sequence, Tuple, Union
 
@@ -16,12 +18,14 @@ from graphnet.models.components.layers import dynTrans1
 from graphnet.utilities.config import save_model_config
 from graphnet.models.gnn.gnn import GNN
 from graphnet.models.utils import calculate_xyzt_homophily
+
 GLOBAL_POOLINGS = {
     "min": scatter_min,
     "max": scatter_max,
     "sum": scatter_sum,
     "mean": scatter_mean,
 }
+
 
 class DynEdgeTITO(GNN):
     """DynEdge (dynamical edge convolutional) model."""
@@ -79,10 +83,10 @@ class DynEdgeTITO(GNN):
         """
         # Latent feature subset for computing nearest neighbours in DynEdge.
         if features_subset is None:
-            features_subset = slice(0, 4) #4D
+            features_subset = slice(0, 4)  # 4D
 
         # DynEdge layer sizes
-        if dynedge_layer_sizes is None: #nb_nearest_neighboursと合わせて変更
+        if dynedge_layer_sizes is None:  # nb_nearest_neighboursと合わせて変更
             dynedge_layer_sizes = dynedge_layer_sizes
 
         assert isinstance(dynedge_layer_sizes, list)
@@ -120,8 +124,6 @@ class DynEdgeTITO(GNN):
         assert all(size > 0 for size in readout_layer_sizes)
 
         self._readout_layer_sizes = readout_layer_sizes
-        
-
 
         # Global pooling scheme(s)
         if isinstance(global_pooling_schemes, str):
@@ -137,7 +139,7 @@ class DynEdgeTITO(GNN):
 
         self._global_pooling_schemes = global_pooling_schemes
 
-        self.use_global_variables = use_global_variables ## if ==True use global variables after pooling
+        self.use_global_variables = use_global_variables
         if add_global_variables_after_pooling:
             assert self._global_pooling_schemes, (
                 "No global pooling schemes were request, so cannot add global"
@@ -202,7 +204,9 @@ class DynEdgeTITO(GNN):
                 post_processing_layers.append(self._activation)
             last_posting_layer_output_dim = nb_out
 
-            self._post_processing = torch.nn.Sequential(*post_processing_layers)
+            self._post_processing = torch.nn.Sequential(
+                *post_processing_layers
+            )
         else:
             last_posting_layer_output_dim = nb_latent_features
 
@@ -214,7 +218,7 @@ class DynEdgeTITO(GNN):
         )
         nb_latent_features = last_posting_layer_output_dim * nb_poolings
         if self.use_global_variables:
-            if self._add_global_variables_after_pooling:  
+            if self._add_global_variables_after_pooling:
                 nb_latent_features += self._nb_global_variables
 
         readout_layers = []
@@ -224,13 +228,19 @@ class DynEdgeTITO(GNN):
             readout_layers.append(self._activation)
 
         self._readout = torch.nn.Sequential(*readout_layers)
-        
 
         # Transformer layer(s)
         if self._use_tranformer_in_last:
-            encoder_layer = TransformerEncoderLayer(d_model=last_posting_layer_output_dim, nhead=8, batch_first=True, dropout=self._dropout, norm_first=False)
-            self._transformer_encoder = TransformerEncoder(encoder_layer, num_layers=self._use_tranformer_in_last)        
-
+            encoder_layer = TransformerEncoderLayer(
+                d_model=last_posting_layer_output_dim,
+                nhead=8,
+                batch_first=True,
+                dropout=self._dropout,
+                norm_first=False,
+            )
+            self._transformer_encoder = TransformerEncoder(
+                encoder_layer, num_layers=self._use_tranformer_in_last
+            )
 
     def _global_pooling(self, x: Tensor, batch: LongTensor) -> Tensor:
         """Perform global pooling."""
@@ -281,7 +291,6 @@ class DynEdgeTITO(GNN):
         # Convenience variables
         x, edge_index, batch = data.x, data.edge_index, data.batch
 
-        
         if self.use_global_variables:
             global_variables = self._calculate_global_variables(
                 x,
@@ -293,7 +302,8 @@ class DynEdgeTITO(GNN):
             # Distribute global variables out to each node
             if not self._add_global_variables_after_pooling:
                 distribute = (
-                    batch.unsqueeze(dim=1) == torch.unique(batch).unsqueeze(dim=0)
+                    batch.unsqueeze(dim=1)
+                    == torch.unique(batch).unsqueeze(dim=0)
                 ).type(torch.float)
 
                 global_variables_distributed = torch.sum(
@@ -304,7 +314,6 @@ class DynEdgeTITO(GNN):
 
                 x = torch.cat((x, global_variables_distributed), dim=1)
 
-
         if self._serial_connection:
             for conv_layer_index, conv_layer in enumerate(self._conv_layers):
                 x, _edge_index = conv_layer(x, data.edge_index[0], batch)
@@ -312,7 +321,7 @@ class DynEdgeTITO(GNN):
             skip_connections = [x]
             for conv_layer_index, conv_layer in enumerate(self._conv_layers):
                 x, _edge_index = conv_layer(x, data.edge_index[0], batch)
-                #print('    dynEdge output skip_connections', x.shape)
+                # print('    dynEdge output skip_connections', x.shape)
                 skip_connections.append(x)
 
             # Skip-cat
@@ -322,10 +331,10 @@ class DynEdgeTITO(GNN):
             x, mask = to_dense_batch(x, batch)
             x = self._transformer_encoder(x, src_key_padding_mask=~mask)
             x = x[mask]
-        
+
         if self._use_postprocessing_layers:
             x = self._post_processing(x)
-        
+
         if self._global_pooling_schemes:
             x = self._global_pooling(x, batch=batch)
             if self.use_global_variables:

@@ -17,7 +17,10 @@ from graphnet.models.graph_builders import KNNGraphBuilder
 from graphnet.models.task.reconstruction import EnergyReconstruction
 from graphnet.training.callbacks import ProgressBar, PiecewiseLinearLR
 from graphnet.training.loss_functions import LogCoshLoss
-from graphnet.training.utils import make_train_validation_dataloader, collate_fn_tito
+from graphnet.training.utils import (
+    make_train_validation_dataloader,
+    collate_fn_tito,
+)
 from graphnet.utilities.argparse import ArgumentParser
 from graphnet.utilities.logging import Logger
 
@@ -124,7 +127,7 @@ def main(
         scheduler_config={
             "interval": "step",
         },
-        USE_ALL_FEA_IN_PRED = False,
+        USE_ALL_FEA_IN_PRED=False,
     )
 
     # Training model

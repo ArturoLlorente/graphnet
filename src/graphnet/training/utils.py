@@ -64,7 +64,7 @@ def make_dataloader(
     loss_weight_column: Optional[str] = None,
     index_column: str = "event_no",
     labels: Optional[Dict[str, Callable]] = None,
-    collate_fn: Optional[Callable] = collate_fn,
+    #collate_fn: Optional[Callable] = collate_fn,
 ) -> DataLoader:
     """Construct `DataLoader` instance."""
     # Check(s)
@@ -96,7 +96,7 @@ def make_dataloader(
         batch_size=batch_size,
         shuffle=shuffle,
         num_workers=num_workers,
-        collate_fn=collate_fn,
+        #collate_fn=collate_fn,
         persistent_workers=persistent_workers,
         prefetch_factor=2,
     )
@@ -126,7 +126,7 @@ def make_train_validation_dataloader(
     loss_weight_table: Optional[str] = None,
     index_column: str = "event_no",
     labels: Optional[Dict[str, Callable]] = None,
-    collate_fn: Optional[Callable] = collate_fn,
+    #collate_fn: Optional[Callable] = collate_fn,
 ) -> Tuple[DataLoader, DataLoader]:
     """Construct train and test `DataLoader` instances."""
     # Reproducibility
@@ -203,14 +203,14 @@ def make_train_validation_dataloader(
     training_dataloader = make_dataloader(
         shuffle=True,
         selection=training_selection,
-        collate_fn=collate_fn,
+        #collate_fn=collate_fn,
         **common_kwargs,  # type: ignore[arg-type]
     )
 
     validation_dataloader = make_dataloader(
         shuffle=False,
         selection=validation_selection,
-        collate_fn=collate_fn,
+        #collate_fn=collate_fn,
         **common_kwargs,  # type: ignore[arg-type]
     )
 

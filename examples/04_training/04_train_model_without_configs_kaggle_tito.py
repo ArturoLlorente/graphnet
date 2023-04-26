@@ -10,24 +10,49 @@ from torch.optim.adam import Adam
 
 from graphnet.constants import EXAMPLE_DATA_DIR, EXAMPLE_OUTPUT_DIR
 from graphnet.data.constants import FEATURES, TRUTH
-from graphnet.models import StandardModel2
+from graphnet.models.standard_model1_tito import StandardModel2
 from graphnet.models.detector.prometheus import Prometheus
 from graphnet.models.gnn import DynEdge
+from graphnet.models.gnn.dynedge_tito_kaggle1 import DynEdgeTITO
 from graphnet.models.graph_builders import KNNGraphBuilder
-from graphnet.models.task.reconstruction import EnergyReconstruction
+from graphnet.models.task.reconstruction import EnergyReconstruction, DirectionReconstructionWithKappa
 from graphnet.training.callbacks import ProgressBar, PiecewiseLinearLR
 from graphnet.training.loss_functions import LogCoshLoss
 from graphnet.training.utils import (
     make_train_validation_dataloader,
     collate_fn_tito,
+    collate_fn,
 )
 from graphnet.utilities.argparse import ArgumentParser
 from graphnet.utilities.logging import Logger
 
 # Constants
-features = FEATURES.PROMETHEUS
-truth = TRUTH.PROMETHEUS
+features = FEATURES.KAGGLE
+truth = TRUTH.KAGGLE
 
+TRAIN_MODE = False
+DROPOUT=0.0
+NB_NEAREST_NEIGHBOURS = [6]
+COLUMNS_NEAREST_NEIGHBOURS = [slice(0,4)]
+USE_G = True
+ONLY_AUX_FALSE = False
+SERIAL_CONNECTION = True
+USE_PP = True
+USE_TRANS_IN_LAST=0
+DYNEDGE_LAYER_SIZE = [
+                (
+                    256,
+                    256,
+                ),
+                (
+                    256,
+                    256,
+                ),
+                (
+                    256,
+                    256,
+                ),
+            ]
 
 def main(
     path: str,
@@ -92,18 +117,20 @@ def main(
         batch_size=config["batch_size"],
         num_workers=config["num_workers"],
         truth_table=truth_table,
-        collate_fn=collate_fn_tito,
+        #collate_fn=collate_fn,
     )
 
     # Building model
     detector = Prometheus(
         graph_builder=KNNGraphBuilder(nb_nearest_neighbours=8),
     )
-    gnn = DynEdge(
+    gnn = DynEdgeTITO(
         nb_inputs=detector.nb_outputs,
-        global_pooling_schemes=["min", "max", "mean", "sum"],
+        dynedge_layer_sizes=DYNEDGE_LAYER_SIZE,
+        global_pooling_schemes=["max"],
+        add_global_variables_after_pooling=True
     )
-    task = EnergyReconstruction(
+    task = DirectionReconstructionWithKappa(
         hidden_size=gnn.nb_outputs,
         target_labels=config["target"],
         loss_function=LogCoshLoss(),
@@ -127,8 +154,10 @@ def main(
         scheduler_config={
             "interval": "step",
         },
-        USE_ALL_FEA_IN_PRED=False,
+        use_all_fea_in_pred=False,
     )
+    
+    print(model)
 
     # Training model
     callbacks = [

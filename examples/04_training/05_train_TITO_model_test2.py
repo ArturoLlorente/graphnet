@@ -10,9 +10,11 @@ from torch.optim.adam import Adam
 
 from graphnet.constants import EXAMPLE_DATA_DIR, EXAMPLE_OUTPUT_DIR
 from graphnet.data.constants import FEATURES, TRUTH
+from graphnet.models.standard_model1_tito import StandardModel2
 from graphnet.models import StandardModel
 from graphnet.models.detector.prometheus import Prometheus
 from graphnet.models.gnn import DynEdge
+from graphnet.models.gnn.dynedge_tito_kaggle1 import DynEdgeTITO
 from graphnet.models.graph_builders import KNNGraphBuilder
 from graphnet.models.task.reconstruction import EnergyReconstruction
 from graphnet.training.callbacks import ProgressBar, PiecewiseLinearLR
@@ -24,6 +26,21 @@ from graphnet.utilities.logging import Logger
 # Constants
 features = FEATURES.PROMETHEUS
 truth = TRUTH.PROMETHEUS
+
+DYNEDGE_LAYER_SIZE = [
+                (
+                    256,
+                    256,
+                ),
+                (
+                    256,
+                    256,
+                ),
+                (
+                    256,
+                    256,
+                ),
+            ]
 
 
 def main(
@@ -95,9 +112,11 @@ def main(
     detector = Prometheus(
         graph_builder=KNNGraphBuilder(nb_nearest_neighbours=8),
     )
-    gnn = DynEdge(
+    gnn = DynEdgeTITO(
         nb_inputs=detector.nb_outputs,
-        global_pooling_schemes=["min", "max", "mean", "sum"],
+        global_pooling_schemes=["max"],
+        dynedge_layer_sizes=DYNEDGE_LAYER_SIZE,
+        add_global_variables_after_pooling=False,
     )
     task = EnergyReconstruction(
         hidden_size=gnn.nb_outputs,
@@ -200,10 +219,10 @@ Train GNN model without the use of config files.
 
     parser.with_standard_arguments(
         "gpus",
-        ("max-epochs", 1),
+        ("max-epochs", 10),
         "early-stopping-patience",
         ("batch-size", 16),
-        "num-workers",
+        ("num-workers", 8),
     )
 
     parser.add_argument(

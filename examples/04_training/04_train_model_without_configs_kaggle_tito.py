@@ -15,13 +15,19 @@ from graphnet.models.detector.prometheus import Prometheus
 from graphnet.models.gnn import DynEdge
 from graphnet.models.gnn.dynedge_tito_kaggle1 import DynEdgeTITO
 from graphnet.models.graph_builders import KNNGraphBuilder
-from graphnet.models.task.reconstruction import EnergyReconstruction, DirectionReconstructionWithKappa
+from graphnet.models.task.reconstruction import (
+    EnergyReconstruction,
+    DirectionReconstructionWithKappa,
+)
 from graphnet.training.callbacks import ProgressBar, PiecewiseLinearLR
-from graphnet.training.loss_functions import LogCoshLoss
+from graphnet.training.loss_functions import LogCoshLoss, DistanceLoss2
+from graphnet.training.labels import Direction
 from graphnet.training.utils import (
     make_train_validation_dataloader,
     collate_fn_tito,
     collate_fn,
+    make_dataloaders2,
+    inference,
 )
 from graphnet.utilities.argparse import ArgumentParser
 from graphnet.utilities.logging import Logger
@@ -30,29 +36,33 @@ from graphnet.utilities.logging import Logger
 features = FEATURES.KAGGLE
 truth = TRUTH.KAGGLE
 
+print(features, type(features))
+print(truth, type(truth))
+
 TRAIN_MODE = False
-DROPOUT=0.0
+DROPOUT = 0.0
 NB_NEAREST_NEIGHBOURS = [6]
-COLUMNS_NEAREST_NEIGHBOURS = [slice(0,4)]
+COLUMNS_NEAREST_NEIGHBOURS = [slice(0, 4)]
 USE_G = True
 ONLY_AUX_FALSE = False
 SERIAL_CONNECTION = True
 USE_PP = True
-USE_TRANS_IN_LAST=0
+USE_TRANS_IN_LAST = 0
 DYNEDGE_LAYER_SIZE = [
-                (
-                    256,
-                    256,
-                ),
-                (
-                    256,
-                    256,
-                ),
-                (
-                    256,
-                    256,
-                ),
-            ]
+    (
+        256,
+        256,
+    ),
+    (
+        256,
+        256,
+    ),
+    (
+        256,
+        256,
+    ),
+]
+
 
 def main(
     path: str,
@@ -90,9 +100,22 @@ def main(
         "path": path,
         "pulsemap": pulsemap,
         "batch_size": batch_size,
+        "train_batch_ids": list(range(1, early_stopping_patience + 1)),
+        "valid_batch_ids": [660],  # only suport one batch
         "num_workers": num_workers,
         "target": target,
         "early_stopping_patience": early_stopping_patience,
+        "features": features,
+        "truth": truth,
+        "truth_table": "meta_table",  # dummy
+        "direction": Direction(),
+        "train_len": 0,  # not using anymore
+        "valid_len": 0,
+        "train_max_pulse": 300,
+        "valid_max_pulse": 200,
+        "train_min_pulse": 0,
+        "valid_min_pulse": 0,
+        "index_column": "event_no",
         "fit": {
             "gpus": gpus,
             "max_epochs": max_epochs,
@@ -106,18 +129,12 @@ def main(
         wandb_logger.experiment.config.update(config)
 
     (
-        training_dataloader,
-        validation_dataloader,
-    ) = make_train_validation_dataloader(
-        config["path"],
-        None,
-        config["pulsemap"],
-        features,
-        truth,
-        batch_size=config["batch_size"],
-        num_workers=config["num_workers"],
-        truth_table=truth_table,
-        #collate_fn=collate_fn,
+        train_dataloader,
+        validate_dataloader,
+        train_dataset,
+        validate_dataset,
+    ) = make_dataloaders2(
+        config=config,
     )
 
     # Building model
@@ -128,35 +145,36 @@ def main(
         nb_inputs=detector.nb_outputs,
         dynedge_layer_sizes=DYNEDGE_LAYER_SIZE,
         global_pooling_schemes=["max"],
-        add_global_variables_after_pooling=True
+        add_global_variables_after_pooling=True,
     )
     task = DirectionReconstructionWithKappa(
         hidden_size=gnn.nb_outputs,
         target_labels=config["target"],
-        loss_function=LogCoshLoss(),
-        transform_prediction_and_target=torch.log10,
+        loss_function=DistanceLoss2(),
     )
     model = StandardModel2(
         detector=detector,
         gnn=gnn,
         tasks=[task],
+        dataset=train_dataset,
+        max_epochs=config["fit"]["max_epochs"],
         optimizer_class=Adam,
         optimizer_kwargs={"lr": 1e-03, "eps": 1e-03},
         scheduler_class=PiecewiseLinearLR,
         scheduler_kwargs={
             "milestones": [
                 0,
-                len(training_dataloader) / 2,
-                len(training_dataloader) * config["fit"]["max_epochs"],
+                len(train_dataset) / 2,
+                len(train_dataset) * config["fit"]["max_epochs"],
             ],
-            "factors": [1e-2, 1, 1e-02],
+            "factors": [1e-03, 1, 1e-03],
         },
         scheduler_config={
             "interval": "step",
         },
         use_all_fea_in_pred=False,
     )
-    
+
     print(model)
 
     # Training model
@@ -169,8 +187,8 @@ def main(
     ]
 
     model.fit(
-        training_dataloader,
-        validation_dataloader,
+        train_dataloader,
+        validate_dataloader,
         callbacks=callbacks,
         logger=wandb_logger if wandb else None,
         **config["fit"],
@@ -181,8 +199,9 @@ def main(
     assert isinstance(additional_attributes, list)  # mypy
 
     results = model.predict_as_dataframe(
-        validation_dataloader,
+        validate_dataloader,
         additional_attributes=additional_attributes + ["event_no"],
+        prediction_columns=model.prediction_columns,
     )
 
     # Save predictions and model to file

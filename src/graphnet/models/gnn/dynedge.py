@@ -275,6 +275,7 @@ class DynEdge(GNN):
         """Apply learnable forward pass."""
         # Convenience variables
         x, edge_index, batch = data.x, data.edge_index, data.batch
+        print(x.shape, edge_index.shape, batch.shape)
 
         global_variables = self._calculate_global_variables(
             x,

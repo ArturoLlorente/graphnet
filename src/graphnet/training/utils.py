@@ -2,7 +2,7 @@
 
 from collections import OrderedDict
 import os
-from typing import Dict, List, Optional, Tuple, Union, Callable
+from typing import Dict, List, Optional, Tuple, Union, Callable, Any
 
 import numpy as np
 import pandas as pd
@@ -15,6 +15,7 @@ from graphnet.data.dataset import Dataset
 from graphnet.data.sqlite import SQLiteDataset
 from graphnet.data.parquet import ParquetDataset
 from graphnet.models import Model
+
 from graphnet.utilities.logging import Logger
 
 
@@ -64,7 +65,7 @@ def make_dataloader(
     loss_weight_column: Optional[str] = None,
     index_column: str = "event_no",
     labels: Optional[Dict[str, Callable]] = None,
-    #collate_fn: Optional[Callable] = collate_fn,
+    # collate_fn: Optional[Callable] = collate_fn,
 ) -> DataLoader:
     """Construct `DataLoader` instance."""
     # Check(s)
@@ -96,7 +97,7 @@ def make_dataloader(
         batch_size=batch_size,
         shuffle=shuffle,
         num_workers=num_workers,
-        #collate_fn=collate_fn,
+        collate_fn=collate_fn,
         persistent_workers=persistent_workers,
         prefetch_factor=2,
     )
@@ -126,7 +127,7 @@ def make_train_validation_dataloader(
     loss_weight_table: Optional[str] = None,
     index_column: str = "event_no",
     labels: Optional[Dict[str, Callable]] = None,
-    #collate_fn: Optional[Callable] = collate_fn,
+    # collate_fn: Optional[Callable] = collate_fn,
 ) -> Tuple[DataLoader, DataLoader]:
     """Construct train and test `DataLoader` instances."""
     # Reproducibility
@@ -203,14 +204,14 @@ def make_train_validation_dataloader(
     training_dataloader = make_dataloader(
         shuffle=True,
         selection=training_selection,
-        #collate_fn=collate_fn,
+        # collate_fn=collate_fn,
         **common_kwargs,  # type: ignore[arg-type]
     )
 
     validation_dataloader = make_dataloader(
         shuffle=False,
         selection=validation_selection,
-        #collate_fn=collate_fn,
+        # collate_fn=collate_fn,
         **common_kwargs,  # type: ignore[arg-type]
     )
 
@@ -294,3 +295,144 @@ def save_results(
     model.save_state_dict(path + "/" + tag + "_state_dict.pth")
     model.save(path + "/" + tag + "_model.pth")
     Logger().info("Results saved at: \n %s" % path)
+
+
+def make_dataloader2(
+    db: str,
+    pulsemaps: Union[str, List[str]],
+    features: List[str],
+    truth: List[str],
+    batch_ids=List[int],
+    max_len: int = 0,
+    max_pulse: int = 200,
+    min_pulse: int = 200,
+    *,
+    batch_size: int,
+    shuffle: bool,
+    selection: Optional[List[int]] = None,
+    num_workers: int = 10,
+    persistent_workers: bool = True,
+    node_truth: List[str] = None,
+    truth_table: str = "truth",
+    node_truth_table: Optional[str] = None,
+    string_selection: List[int] = None,
+    loss_weight_table: Optional[str] = None,
+    loss_weight_column: Optional[str] = None,
+    index_column: str = "event_no",
+    labels: Optional[Dict[str, Callable]] = None,
+    # collate_fn: Optional[Callable] = collate_fn,
+) -> DataLoader:
+    """Construct `DataLoader` instance."""
+    # Check(s)
+    if isinstance(pulsemaps, str):
+        pulsemaps = [pulsemaps]
+
+    dataset = SQLiteDataset(
+        path=db,
+        pulsemaps=pulsemaps,
+        features=features,
+        truth=truth,
+        batch_ids=batch_ids,
+        selection=selection,
+        node_truth=node_truth,
+        truth_table=truth_table,
+        node_truth_table=node_truth_table,
+        string_selection=string_selection,
+        loss_weight_table=loss_weight_table,
+        loss_weight_column=loss_weight_column,
+        index_column=index_column,
+        max_len=max_len,
+        max_pulse=max_pulse,
+        min_pulse=min_pulse,
+    )
+
+    # adds custom labels to dataset
+    if isinstance(labels, dict):
+        for label in labels.keys():
+            dataset.add_label(key=label, fn=labels[label])
+
+    dataloader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        num_workers=num_workers,
+        collate_fn=collate_fn,
+        persistent_workers=persistent_workers,
+        prefetch_factor=2,
+    )
+
+    return dataloader, dataset
+
+
+def make_dataloaders2(config: Dict[str, Any]) -> List[Any]:
+    """Constructs training and validation dataloaders for training with early
+    stopping."""
+    train_dataloader, train_dataset = make_dataloader2(
+        db="dummy",
+        selection=None,
+        pulsemaps=config["pulsemap"],
+        features=config["features"],
+        truth=config["truth"],
+        batch_ids=config["train_batch_ids"],
+        batch_size=config["batch_size"],
+        num_workers=config["num_workers"],
+        shuffle=True,
+        labels={"direction": config["direction"]},
+        index_column=config["index_column"],
+        truth_table=config["truth_table"],
+        max_len=config["train_len"],
+        max_pulse=config["train_max_pulse"],
+        min_pulse=config["train_min_pulse"],
+    )
+
+    validate_dataloader, validate_dataset = make_dataloader2(
+        db="dummy",
+        selection=None,
+        pulsemaps=config["pulsemap"],
+        features=features,
+        truth=truth,
+        batch_ids=config["valid_batch_ids"],
+        batch_size=config["batch_size"],
+        num_workers=config["num_workers"],
+        shuffle=False,
+        labels={"direction": direction},
+        index_column=config["index_column"],
+        truth_table=config["truth_table"],
+        max_len=config["valid_len"],
+        max_pulse=config["valid_max_pulse"],
+        min_pulse=config["valid_min_pulse"],
+    )
+    return (
+        train_dataloader,
+        validate_dataloader,
+        train_dataset,
+        validate_dataset,
+    )
+
+
+def inference(model, config: Dict[str, Any]) -> pd.DataFrame:
+    """Applies model to the database specified in
+    config['inference_database_path'] and saves results to disk."""
+    # Make Dataloader
+    test_dataloader = make_dataloader(
+        db=config["inference_database_path"],
+        selection=None,  # Entire database
+        pulsemaps=config["pulsemap"],
+        features=config["features"],
+        truth=config["truth"],
+        batch_size=config["batch_size"],
+        num_workers=config["num_workers"],
+        shuffle=False,
+        labels={"direction": config["direction"]},
+        index_column=config["index_column"],
+        truth_table=config["truth_table"],
+    )
+
+    # Get predictions
+    results = model.predict_as_dataframe(
+        # gpus = config['gpus'],
+        dataloader=test_dataloader,
+        prediction_columns=model.prediction_columns,
+        additional_attributes=model.additional_attributes,
+    )
+    return results

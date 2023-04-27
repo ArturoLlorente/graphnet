@@ -37,7 +37,7 @@ class StandardModel2(Model):
         scheduler_class: Optional[type] = None,
         scheduler_kwargs: Optional[Dict] = None,
         scheduler_config: Optional[Dict] = None,
-        use_all_fea_in_pred: tuple = None,
+        use_all_fea_in_pred: Optional[tuple] = None,
     ) -> None:
         """Construct `StandardModel`."""
         # Base class constructor
@@ -117,10 +117,10 @@ class StandardModel2(Model):
         between the training and validation step.
         """
         preds = self(batch)
-        vlosses = self._task[1].compute_loss(preds[1], batch)
+        vlosses = self._tasks[1].compute_loss(preds[1], batch)
         vloss = torch.sum(vlosses)
 
-        tlosses = self._task[0].compute_loss(preds[0], batch)
+        tlosses = self._tasks[0].compute_loss(preds[0], batch)
         tloss = torch.sum(tlosses)
 
         loss = vloss + tloss

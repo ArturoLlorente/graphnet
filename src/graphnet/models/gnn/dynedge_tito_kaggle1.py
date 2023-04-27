@@ -294,7 +294,8 @@ class DynEdgeTITO(GNN):
         if self.use_global_variables:
             global_variables = self._calculate_global_variables(
                 x,
-                edge_index[0],
+                edge_index,
+                # edge_index[0], # Wrong in jupyter notebook
                 batch,
                 torch.log10(data.n_pulses),
             )
@@ -316,11 +317,11 @@ class DynEdgeTITO(GNN):
 
         if self._serial_connection:
             for conv_layer_index, conv_layer in enumerate(self._conv_layers):
-                x, _edge_index = conv_layer(x, data.edge_index[0], batch)
+                x, _edge_index = conv_layer(x, data.edge_index, batch)
         else:
             skip_connections = [x]
             for conv_layer_index, conv_layer in enumerate(self._conv_layers):
-                x, _edge_index = conv_layer(x, data.edge_index[0], batch)
+                x, _edge_index = conv_layer(x, data.edge_index, batch)
                 # print('    dynEdge output skip_connections', x.shape)
                 skip_connections.append(x)
 

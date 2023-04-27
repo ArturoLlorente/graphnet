@@ -28,19 +28,19 @@ features = FEATURES.PROMETHEUS
 truth = TRUTH.PROMETHEUS
 
 DYNEDGE_LAYER_SIZE = [
-                (
-                    256,
-                    256,
-                ),
-                (
-                    256,
-                    256,
-                ),
-                (
-                    256,
-                    256,
-                ),
-            ]
+    (
+        256,
+        256,
+    ),
+    (
+        256,
+        256,
+    ),
+    (
+        256,
+        256,
+    ),
+]
 
 
 def main(

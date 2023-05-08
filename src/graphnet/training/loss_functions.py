@@ -446,3 +446,22 @@ class VonMisesFisher3DLoss(VonMisesFisherLoss):
         kappa = prediction[:, 3]
         p = kappa.unsqueeze(1) * prediction[:, [0, 1, 2]]
         return self._evaluate(p, target)
+    
+    
+class DistanceLoss2(LossFunction):
+
+    def _forward(self, prediction: Tensor, target: Tensor) -> Tensor:
+        target = target.reshape(-1, 3)
+        # Check(s)
+        assert prediction.dim() == 2 and prediction.size()[1] == 4
+        assert target.dim() == 2
+        assert prediction.size()[0] == target.size()[0]
+        
+        eps = 1e-4
+        prediction_length = torch.linalg.vector_norm(prediction[:, [0, 1, 2]], dim=1)
+        prediction_length = torch.clamp(prediction_length, min=eps)
+        prediction =  prediction[:, [0, 1, 2]]/prediction_length.unsqueeze(1)
+        cosLoss = prediction[:, 0] * target[:, 0] + prediction[:, 1] * target[:, 1] + prediction[:, 2] * target[:, 2]    
+        cosLoss = torch.clamp(cosLoss, min=-1+eps, max=1-eps)
+        thetaLoss = torch.arccos(cosLoss)
+        return thetaLoss

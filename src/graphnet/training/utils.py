@@ -10,7 +10,6 @@ from pytorch_lightning import Trainer
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
 from torch_geometric.data import Batch, Data
-
 from graphnet.data.dataset import Dataset
 from graphnet.data.sqlite import SQLiteDataset
 from graphnet.data.parquet import ParquetDataset

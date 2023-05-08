@@ -2,28 +2,42 @@
 
 import os
 from typing import Any, Dict, List, Optional
+import pickle
 
+import torch
 from pytorch_lightning.callbacks import EarlyStopping
 from pytorch_lightning.loggers import WandbLogger
-import torch
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.optim.adam import Adam
+
+
+from graphnet.training.labels import Direction
 
 from graphnet.constants import EXAMPLE_DATA_DIR, EXAMPLE_OUTPUT_DIR
 from graphnet.data.constants import FEATURES, TRUTH
 from graphnet.models import StandardModel
 from graphnet.models.detector.prometheus import Prometheus
-from graphnet.models.gnn import DynEdge
+from graphnet.models.detector.icecube import IceCube86, IceCubeKaggle, IceCubeDeepCore
+from graphnet.models.gnn import DynEdgeTITO, DynEdge
 from graphnet.models.graph_builders import KNNGraphBuilder
-from graphnet.models.task.reconstruction import EnergyReconstruction
+from graphnet.models.task.reconstruction import (EnergyReconstruction, 
+                                                 DirectionReconstructionWithKappa,
+                                                 ZenithReconstructionWithKappa,
+                                                 AzimuthReconstructionWithKappa,)
 from graphnet.training.callbacks import ProgressBar, PiecewiseLinearLR
-from graphnet.training.loss_functions import LogCoshLoss
-from graphnet.training.utils import make_train_validation_dataloader
+from graphnet.training.loss_functions import (LogCoshLoss, 
+                                              DistanceLoss2, 
+                                              VonMisesFisher3DLoss, 
+                                              VonMisesFisher2DLoss, 
+                                              MSELoss
+                                              )
+from graphnet.training.utils import make_train_validation_dataloader, collate_fn
 from graphnet.utilities.argparse import ArgumentParser
 from graphnet.utilities.logging import Logger
 
 # Constants
-features = FEATURES.PROMETHEUS
-truth = TRUTH.PROMETHEUS
+features = FEATURES.KAGGLE
+truth = TRUTH.KAGGLE
 
 
 def main(
@@ -72,7 +86,7 @@ def main(
     }
 
     archive = os.path.join(EXAMPLE_OUTPUT_DIR, "train_model_without_configs")
-    run_name = "dynedge_{}_example".format(config["target"])
+    run_name = "dynedge_original_{}_example".format(config["target"])
     if wandb:
         # Log configuration to W&B
         wandb_logger.experiment.config.update(config)
@@ -89,22 +103,33 @@ def main(
         batch_size=config["batch_size"],
         num_workers=config["num_workers"],
         truth_table=truth_table,
+        index_column="event_id",
+        labels={'direction': Direction()}
     )
 
+    
     # Building model
-    detector = Prometheus(
-        graph_builder=KNNGraphBuilder(nb_nearest_neighbours=8),
+    detector = IceCubeKaggle(
+        graph_builder=KNNGraphBuilder(nb_nearest_neighbours=6),
     )
-    gnn = DynEdge(
+    gnn = DynEdgeTITO(
         nb_inputs=detector.nb_outputs,
-        global_pooling_schemes=["min", "max", "mean", "sum"],
+        global_pooling_schemes=["max"],
+        layer_size_scale=3
     )
-    task = EnergyReconstruction(
+    task = DirectionReconstructionWithKappa(
         hidden_size=gnn.nb_outputs,
         target_labels=config["target"],
-        loss_function=LogCoshLoss(),
-        transform_prediction_and_target=torch.log10,
+        loss_function=DistanceLoss2(),
     )
+    
+    additional_attributes = ['zenith', 'azimuth', 'event_id']
+    prediction_columns = [config["target"][0] + '_x', 
+                          config["target"][0] + '_y', 
+                          config["target"][0] + '_z', 
+                          config["target"][0] + '_kappa' ]
+    print('ATTRIBUTES ARE: ', additional_attributes)
+    print('PREDICTION COLUMNS ARE: ', prediction_columns)
     model = StandardModel(
         detector=detector,
         gnn=gnn,
@@ -115,7 +140,7 @@ def main(
         scheduler_kwargs={
             "milestones": [
                 0,
-                len(training_dataloader) / 2,
+                len(training_dataloader),
                 len(training_dataloader) * config["fit"]["max_epochs"],
             ],
             "factors": [1e-2, 1, 1e-02],
@@ -124,6 +149,9 @@ def main(
             "interval": "step",
         },
     )
+    
+    model.prediction_columns = prediction_columns
+    model.additional_attributes = additional_attributes
 
     # Training model
     callbacks = [
@@ -133,6 +161,8 @@ def main(
         ),
         ProgressBar(),
     ]
+    
+
 
     model.fit(
         training_dataloader,
@@ -142,13 +172,17 @@ def main(
         **config["fit"],
     )
 
-    # Get predictions
-    additional_attributes = model.target_labels
+    
+    # Get predictions    
+
+    print("LABELS ARE:" , additional_attributes)
     assert isinstance(additional_attributes, list)  # mypy
 
     results = model.predict_as_dataframe(
         validation_dataloader,
-        additional_attributes=additional_attributes + ["event_no"],
+        additional_attributes=additional_attributes,
+        prediction_columns=prediction_columns,
+        
     )
 
     # Save predictions and model to file
@@ -174,13 +208,13 @@ Train GNN model without the use of config files.
     parser.add_argument(
         "--path",
         help="Path to dataset file (default: %(default)s)",
-        default=f"{EXAMPLE_DATA_DIR}/sqlite/prometheus/prometheus-events.db",
+        default="/home/arturopp/repos/graphnet/data/kaggle/batch_1.db",
     )
 
     parser.add_argument(
         "--pulsemap",
         help="Name of pulsemap to use (default: %(default)s)",
-        default="total",
+        default="pulse_table",
     )
 
     parser.add_argument(
@@ -189,20 +223,20 @@ Train GNN model without the use of config files.
             "Name of feature to use as regression target (default: "
             "%(default)s)"
         ),
-        default="total_energy",
+        default=["direction"],
     )
 
     parser.add_argument(
         "--truth-table",
         help="Name of truth table to be used (default: %(default)s)",
-        default="mc_truth",
+        default="meta_table",
     )
 
     parser.with_standard_arguments(
         "gpus",
-        ("max-epochs", 1),
-        "early-stopping-patience",
-        ("batch-size", 16),
+        ("max-epochs", 5),
+        ("early-stopping-patience", 2),
+        ("batch-size", 1),
         ("num-workers", 8),
     )
 

@@ -2,9 +2,7 @@ import os
 import pandas as pd
 from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import EarlyStopping
-from pytorch_lightning.loggers import WandbLogger
 from graphnet.models.task import IdentityTask
-from graphnet.models.task.reconstruction import DirectionReconstructionWithKappa
 #from graphnet.models.task.reconstruction import ZenithReconstructionWithKappa, AzimuthReconstructionWithKappa, PassOutput1
 import torch
 from torch.optim.adam import Adam
@@ -12,12 +10,10 @@ from graphnet.training.loss_functions import  LogCoshLoss
 from graphnet.data.constants import FEATURES, TRUTH
 from graphnet.models import StandardModel
 from graphnet.models.detector.icecube import IceCube86
-from graphnet.models.gnn.dynedge import DynEdgeTITO
+from graphnet.models.gnn.dynedge import DynEdge
 from graphnet.models.coarsening import DOMCoarsening
-from graphnet.training.loss_functions import VonMisesFisher3DLoss
 from graphnet.training.callbacks import ProgressBar, PiecewiseLinearLR
 from graphnet.training.utils import get_predictions, make_dataloader
-
 import dill
 import numpy as np
 from graphnet.models.graph_builders import KNNGraphBuilder
@@ -187,6 +183,23 @@ def make_ensemble_dataloaders(
     )
     return train_dataloader, val_dataloader
 
+
+
+def split_selection(selection):
+    """produces a 60%, 20%, 20% split for training, validation and test sets.
+
+    Args:
+        selection (pandas.DataFrame): A dataframe containing your selection
+
+    Returns:
+        train: indices for training. numpy.ndarray
+        validate: indices for validation. numpy.ndarray
+        test: indices for testing. numpy.ndarray
+    """
+    train, validate = np.split(selection, [int(.9*len(selection))])
+    return train.tolist(), validate.tolist()
+
+
 def build_model(run_name, device, archive):
     model = torch.load(os.path.join(archive, f"{run_name}.pth"),pickle_module=dill)
     model.to('cuda:%s'%device[0])
@@ -194,31 +207,16 @@ def build_model(run_name, device, archive):
     model.inference()
     return model 
 
-def train_and_predict_on_validation_set(
-    target,training_dataloader, 
-    validation_dataloader, 
-    test_dataloader, 
-    pulsemap,
-    batch_size,
-    num_workers, 
-    n_epochs,
-    device, 
-    run_name,archive, 
-    rop, 
-    patience = 5, 
-    coarsening = None,
-    nb_nearest_neighbours = 6,
-    ):
+def train_and_predict_on_validation_set(target,training_dataloader, validation_dataloader, test_dataloader, pulsemap, batch_size, num_workers, n_epochs, device, run_name,archive, rop, patience = 5, coarsening = None):
     print(f"features: {features}")
     print(f"truth: {truth}")
 
     # Building model
-    detector = IceCube86(graph_builder=KNNGraphBuilder(nb_nearest_neighbours=nb_nearest_neighbours))
+    detector = IceCube86(graph_builder=KNNGraphBuilder(nb_nearest_neighbours=8))
     
-    gnn = DynEdgeTITO(
+    gnn = DynEdge(
             nb_inputs=detector.nb_outputs,
-            global_pooling_schemes=["max"],
-            layer_size_scale=3,
+            global_pooling_schemes=["min", "max", "mean"],
             )
     
     if target == 'classification_emuon_entry':
@@ -231,12 +229,6 @@ def train_and_predict_on_validation_set(
                            loss_weight = None,)
         prediction_columns =[target + "_pred"]
         additional_attributes=[target, "event_no"]
-    elif target == 'direction_reconstruction':
-        task = DirectionReconstructionWithKappa(
-                           hidden_size=gnn.nb_outputs,
-                           target_labels=target,
-                           loss_function=VonMisesFisher3DLoss(),  
-        )
     else:
         assert 1 == 2, "Task not found"
 
@@ -282,7 +274,7 @@ def train_and_predict_on_validation_set(
         max_epochs=n_epochs,
         callbacks=callbacks,
         log_every_n_steps=1,
-        #logger= wandb_logger if wandb else None,
+        logger= None,
         #strategy='ddp'
         #resume_from_checkpoint = 
     )
@@ -324,8 +316,8 @@ def predict(model,trainer,target,dataloader, additional_attributes,device, tag, 
 # Main function call
 if __name__ == "__main__":
     # Run management
-    targets = ['direction']
-    archive = "/remote/ceph/user/l/llorente/northeren_tracks"
+    targets = ['classification_emuon_entry']
+    archive = "/remote/ceph/user/o/oersoe/northeren_tracks"
     for target in targets:
         weight_column_name = None 
         weight_table_name =  None
@@ -402,7 +394,3 @@ if __name__ == "__main__":
         
         train_and_predict_on_validation_set(target,training_dataloader, validation_dataloader, test_dataloader, pulsemap, batch_size, num_workers, n_epochs, device, run_name,archive, coarsening = coarsening,rop=rop, patience = patience)
 
-## check cuda devices
-## set patience
-## rop = True (ReduceROnPlateau)
-## logger

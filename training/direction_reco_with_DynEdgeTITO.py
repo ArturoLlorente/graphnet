@@ -92,16 +92,18 @@ def split_selection(selection):
 
 def make_dataloaders(
     db: Union[List[str], str],
+    db_test: Union[List[str], str],
     pulsemaps: Union[str, List[str]],
     features: List[str],
     truth: List[str],
     *,
     batch_size: int = 256,
     selection: Optional[List[int]],
+    test_selection: Optional[List[int]],
     num_workers: int = 10,
     persistent_workers: bool = True,
     node_truth: List[str] = None,
-    truth_table: str = "truth",
+    truth_table: str = 'northeren_tracks_muon_labels',
     node_truth_table: Optional[str] = None,
     string_selection: List[int] = None,
     loss_weight_table: Optional[str] = None,
@@ -126,13 +128,11 @@ def make_dataloaders(
         validate_datasets = []
         c = 0
         for database in db:
-            print(database)
-            train_datasets.append(SQLiteDataset(
+            common_kwargs = dict(
                 path=database,
                 pulsemaps=pulsemaps,
                 features=features,
                 truth=truth,
-                selection=split_selections[database]['train'],
                 node_truth=node_truth,
                 truth_table=truth_table,
                 node_truth_table=node_truth_table,
@@ -140,58 +140,53 @@ def make_dataloaders(
                 loss_weight_table=loss_weight_table,
                 loss_weight_column=loss_weight_column,
                 index_column=index_column,
+            )
+
+            train_datasets.append(SQLiteDataset(
+                selection=split_selections[database]['train'],
+                **common_kwargs,
             ))
             validate_datasets.append(SQLiteDataset(
-                path=database,
-                pulsemaps=pulsemaps,
-                features=features,
-                truth=truth,
                 selection=split_selections[database]['validation'],
-                node_truth=node_truth,
-                truth_table=truth_table,
-                node_truth_table=node_truth_table,
-                string_selection=string_selection,
-                loss_weight_table=loss_weight_table,
-                loss_weight_column=loss_weight_column,
-                index_column=index_column,
+                **common_kwargs,
             ))
             c +=1
             # adds custom labels to dataset
-            if isinstance(labels, dict):
-                for label in labels.keys():
-                    for train_dataset in train_datasets:
-                        train_dataset.add_label(key=label, fn=labels[label])
-                    for val_dataset in validate_datasets:
-                        val_dataset.add_label(key=label, fn=labels[label])
-                        
-            train_dataset = EnsembleDataset(train_datasets)
-            val_dataset = EnsembleDataset(validate_datasets)
+        if isinstance(labels, dict):
+            for label in labels.keys():
+                for train_dataset in train_datasets:
+                    train_dataset.add_label(key=label, fn=labels[label])
+                for val_dataset in validate_datasets:
+                    val_dataset.add_label(key=label, fn=labels[label])
+                    
+        train_dataset = EnsembleDataset(train_datasets)
+        val_dataset = EnsembleDataset(validate_datasets)
+        
+        common_kwargs = dict(
+            batch_size=batch_size,
+            num_workers=num_workers,
+            collate_fn=collate_fn,
+            persistent_workers=persistent_workers,
+            prefetch_factor=2,
+            )
             
-            training_dataloader = DataLoader(
-                train_dataset,
-                batch_size=batch_size,
-                shuffle=True,
-                num_workers=num_workers,
-                collate_fn=collate_fn,
-                persistent_workers=persistent_workers,
-                prefetch_factor=2,
-            )
-            validation_dataloader = DataLoader(
-                val_dataset,
-                batch_size=batch_size,
-                shuffle=False,
-                num_workers=num_workers,
-                collate_fn=collate_fn,
-                persistent_workers=persistent_workers,
-                prefetch_factor=2,
-            )
+        training_dataloader = DataLoader(
+            train_dataset,
+            shuffle=True,
+            **common_kwargs,
+        )
+        validation_dataloader = DataLoader(
+            val_dataset,
+            shuffle=False,
+            **common_kwargs,
+        )
+            
                         
     elif isinstance(db, str):
         
         train_selection, validate_selection = split_selection(selection)
         
         common_kwargs = dict(
-            db=db,
             pulsemaps=pulsemaps,
             features=features,
             truth=truth,
@@ -204,12 +199,14 @@ def make_dataloaders(
             labels=labels,
         )
         training_dataloader = make_dataloader(
+            db=db,
             selection=train_selection,
             shuffle = True,
             **common_kwargs,
         )
 
         validation_dataloader = make_dataloader(
+            db=db,
             selection=validate_selection,
             shuffle=False,
             **common_kwargs,
@@ -217,9 +214,29 @@ def make_dataloaders(
     else:
         assert 1 == 2, "dont use this code"
 
+                        
+    if isinstance(db_test, str):
+        
+        test_dataloader = make_dataloader(
+            db=db_test,
+            selection=test_selection,
+            shuffle = False,
+            pulsemaps=pulsemaps,
+            features=features,
+            truth=truth,
+            batch_size=batch_size,
+            num_workers=num_workers,
+            persistent_workers=persistent_workers,
+            node_truth=node_truth,
+            node_truth_table=node_truth_table,
+            string_selection=string_selection,
+            labels=labels,
+            )
 
+    else:
+        assert 1 == 2, "dont use this code"
 
-    return training_dataloader, validation_dataloader
+    return training_dataloader, validation_dataloader, test_dataloader
 
 def build_model(run_name, device, archive):
     model = torch.load(os.path.join(archive, f"{run_name}.pth"),pickle_module=dill)
@@ -252,7 +269,22 @@ def train_and_predict_on_validation_set(
     print(f"features: {features}")
     print(f"truth: {truth}")
 
-    #logger = Logger()
+    
+
+    # Initialise Weights & Biases (W&B) run
+    if wandb:
+        logger = Logger()
+        # Make sure W&B output directory exists
+        wandb_dir = "./wandb/"
+        os.makedirs(wandb_dir, exist_ok=True)
+        wandb_logger = WandbLogger(
+            project="direction_reco_DynEdgeTito",
+            save_dir=wandb_dir,
+            log_model=True,
+        )
+        logger.info(f"features: {features}")
+        logger.info(f"truth: {truth}")
+
 
 
     # Building model
@@ -313,7 +345,6 @@ def train_and_predict_on_validation_set(
         scheduler_config=scheduler_config,
         coarsening = coarsening
      )
-    print(model)
     
     # Training model
     callbacks = [
@@ -332,12 +363,10 @@ def train_and_predict_on_validation_set(
         callbacks=callbacks,
         log_every_n_steps=1,
         accumulate_grad_batches=accumulate_grad_batches,
-        #logger= wandb_logger if wandb else None,
-        #strategy='ddp'
-        #resume_from_checkpoint = 
+        logger= wandb_logger if wandb else None,
     )
     if only_load_model:
-        model.load_state_dict('/remote/ceph/user/l/llorente/northeren_tracks/dynedgeTITO_muon_entry_direction_reco_direction_InIceDSTPulses_1e_p1_max_pulses600_coarsening_none_rop_True_size3_nb6_state_dict.pth')
+        model.load_state_dict('/remote/ceph/user/l/llorente/northeren_tracks/dynedgeTITO_muon_entry_direction_reco_direction_InIceDSTPulses_150e_p10_max_pulses600_coarsening_none_rop_True_layersize3_nb6_state_dict.pth')
     else:   
         try:
             trainer.fit(model, training_dataloader, validation_dataloader)
@@ -346,8 +375,9 @@ def train_and_predict_on_validation_set(
         
         model.save(os.path.join(archive, f"{run_name}.pth"))
         model.save_state_dict(os.path.join(archive, f"{run_name}_state_dict.pth"))
+        print(f"Model saved to {archive}/{run_name}.pth")
 
-    #predict(model,trainer,target,validation_dataloader, additional_attributes = additional_attributes, device = device, tag = 'valid', prediction_columns = prediction_columns)
+    predict(model,trainer,target,validation_dataloader, additional_attributes = additional_attributes, device = device, tag = 'valid', prediction_columns = prediction_columns)
     predict(model,trainer,target,test_dataloader, additional_attributes = additional_attributes, device = device, tag = 'test', prediction_columns = prediction_columns)
     
 
@@ -389,33 +419,34 @@ def predict(model,
 if __name__ == "__main__":
     
     target = 'direction'
-    archive = "/remote/ceph/user/l/llorente/northeren_tracks"
+    archive = "/remote/ceph/user/l/llorente/northeren_tracks_ensembled"
     weight_column_name = None 
     weight_table_name =  None
-    batch_size = 256
-    CUDA_DEVICE = 3
+    batch_size = 128
+    CUDA_DEVICE = 1
     device = [CUDA_DEVICE] if CUDA_DEVICE is not None else None
-    n_epochs = 1
-    num_workers = 64
-    patience = 1
+    n_epochs = 100
+    num_workers = 30
+    patience = 10
     pulsemap = 'InIceDSTPulses'
     node_truth_table = None
     node_truth = None
-    truth_table = 'northeren_tracks_muon_labels'
+    truth_table = 'truth'
     index_column = 'event_no'
-    max_pulses = 50
+    max_pulses = 600
     labels = {'direction': Direction()}
     coarsening = None #DOMCoarsening()
     rop = True
     nb_nearest_neighbours = 6
-    layer_size_scale = 3
     global_pooling_schemes = ["max"]
     features_subset = slice(0, 4)
     dyntrans_layer_sizes = [(256, 256),
                             (256, 256),
                             (256, 256)]
     accumulate_grad_batches = 4
-    
+    wandb = False
+    only_load_model = False
+    num_database_files = 2
 
     
 
@@ -426,65 +457,55 @@ if __name__ == "__main__":
     features = FEATURES.ICECUBE86
     truth = TRUTH.ICECUBE86
     
-    # get_list_of_databases:
-    databases = '/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/dev_northern_tracks_muon_labels_v3_part_1.db'
-                 #'/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/dev_northern_tracks_muon_labels_v3_part_2.db']
-                    #'/mnt/scratch/rasmus_orsoe/databases/dev_northeren_tracks_muon_labels_v3/data/dev_northern_tracks_muon_labels_v3_part_3.db',
-                    #'/mnt/scratch/rasmus_orsoe/databases/dev_northeren_tracks_muon_labels_v3/data/dev_northern_tracks_muon_labels_v3_part_4.db']
-
-    test_database = '/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/dev_northern_tracks_muon_labels_v3_part_1.db'
-
+    all_databases = ['/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/dev_northern_tracks_muon_labels_v3_part_1.db',
+                    '/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/dev_northern_tracks_muon_labels_v3_part_2.db',
+                    '/mnt/scratch/rasmus_orsoe/databases/dev_northeren_tracks_muon_labels_v3/data/dev_northern_tracks_muon_labels_v3_part_3.db',
+                    '/mnt/scratch/rasmus_orsoe/databases/dev_northeren_tracks_muon_labels_v3/data/dev_northern_tracks_muon_labels_v3_part_4.db']
     # get selections:
-    selections_uncut = pd.read_csv('/home/iwsatlas1/oersoe/phd/northern_tracks/energy_reconstruction/selections/dev_northern_tracks_muon_labels_v3_part_1_regression_selection.csv'),
-                        #pd.read_csv('/home/iwsatlas1/oersoe/phd/northern_tracks/energy_reconstruction/selections/dev_northern_tracks_muon_labels_v3_part_2_regression_selection.csv')]
-                    #pd.read_csv('/home/iwsatlas1/oersoe/phd/northern_tracks/energy_reconstruction/selections/dev_northern_tracks_muon_labels_v3_part_3_regression_selection.csv').sample(frac=1)['event_no'].ravel().tolist(),
-                    #pd.read_csv('/home/iwsatlas1/oersoe/phd/northern_tracks/energy_reconstruction/selections/dev_northern_tracks_muon_labels_v3_part_4_regression_selection.csv').sample(frac=1)['event_no'].ravel().tolist()]
-
-    #selections = []
-    for selection in selections_uncut: 
-    #    selections.append(selection.loc[selection['n_pulses']<= max_pulses,:].sample(frac=1)['event_no'].ravel().tolist())
+    all_selections = [pd.read_csv('/home/iwsatlas1/oersoe/phd/northern_tracks/energy_reconstruction/selections/dev_northern_tracks_muon_labels_v3_part_1_regression_selection.csv'),
+                    pd.read_csv('/home/iwsatlas1/oersoe/phd/northern_tracks/energy_reconstruction/selections/dev_northern_tracks_muon_labels_v3_part_2_regression_selection.csv'),
+                    pd.read_csv('/home/iwsatlas1/oersoe/phd/northern_tracks/energy_reconstruction/selections/dev_northern_tracks_muon_labels_v3_part_3_regression_selection.csv'),
+                    pd.read_csv('/home/iwsatlas1/oersoe/phd/northern_tracks/energy_reconstruction/selections/dev_northern_tracks_muon_labels_v3_part_4_regression_selection.csv')]
+    
+    # get_list_of_databases:
+    if num_database_files == 1:
+        databases = all_databases[0]
+        selection = all_selections[0]
         selections = selection.loc[selection['n_pulses']<= max_pulses,:].sample(frac=1)['event_no'].ravel().tolist()
-    #selection = selection.sample(frac = 1)['event_no'].ravel().tolist()
-    test_selection = pd.read_csv('/home/iwsatlas1/oersoe/phd/northern_tracks/energy_reconstruction/selections/dev_northern_tracks_muon_labels_v3_part_1_regression_selection.csv')
-    test_selection = test_selection.loc[test_selection['n_pulses']<=max_pulses,:].sample(frac=1)['event_no'].ravel().tolist()
-    
-    
+    else:
+        databases = all_databases[:num_database_files]
+        selections = []
+        for selection in all_selections[:num_database_files]:
+            selections.append(selection.loc[selection['n_pulses']<= max_pulses,:].sample(frac=1)['event_no'].ravel().tolist())
 
-    training_dataloader, validation_dataloader = make_dataloaders(db=databases,
-                                                                pulsemaps=pulsemap,
-                                                                features=features,
-                                                                truth=truth,
-                                                                batch_size=batch_size,
-                                                                selection=selections,
-                                                                num_workers=num_workers,
-                                                                persistent_workers=True,
-                                                                node_truth=node_truth,
-                                                                truth_table=truth_table,
-                                                                node_truth_table=node_truth_table,
-                                                                string_selection=None,
-                                                                loss_weight_table=None,
-                                                                loss_weight_column=None,
-                                                                index_column=index_column,
-                                                                labels=labels,
-                                                                )
-    test_dataloader =  make_dataloader(db=test_database,
+    test_database = '/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/dev_northern_tracks_muon_labels_v3_part_5.db'
+    test_selection = pd.read_csv('/home/iwsatlas1/oersoe/phd/northern_tracks/energy_reconstruction/selections/dev_northern_tracks_muon_labels_v3_part_5_regression_selection.csv')
+    test_selection = test_selection.loc[test_selection['n_pulses']<=max_pulses,:].sample(frac=1)['event_no'].ravel().tolist()
+
+    (training_dataloader, 
+     validation_dataloader, 
+     test_dataloader) = make_dataloaders(db=databases,
+                                        db_test=test_database,
                                         pulsemaps=pulsemap,
                                         features=features,
                                         truth=truth,
                                         batch_size=batch_size,
-                                        selection=test_selection,
+                                        selection=selections,
+                                        test_selection=test_selection,
                                         num_workers=num_workers,
                                         persistent_workers=True,
                                         node_truth=node_truth,
                                         truth_table=truth_table,
                                         node_truth_table=node_truth_table,
                                         string_selection=None,
+                                        loss_weight_table=None,
+                                        loss_weight_column=None,
                                         index_column=index_column,
                                         labels=labels,
-                                        shuffle=False,
                                         )
 
-    run_name = f"dynedgeTITO_muon_entry_direction_reco_{target}_{pulsemap}_{n_epochs}e_p{patience}_max_pulses{max_pulses}_coarsening_{'none' if coarsening is None else coarsening.__class__.__name__}_rop_{rop}_size{layer_size_scale}_nb{nb_nearest_neighbours}"
+    
+    run_name = f"dynedgeTITO_muon_entry_direction_reco_{target}_{pulsemap}_{n_epochs}e_p{patience}_max_pulses{max_pulses}_coarsening_{'none' if coarsening is None else coarsening.__class__.__name__}_rop_{rop}_layersize{len(dyntrans_layer_sizes)}_nb{nb_nearest_neighbours}"
     
     train_and_predict_on_validation_set(target=target,
                                         run_name=run_name,
@@ -501,8 +522,9 @@ if __name__ == "__main__":
                                         features_subset=features_subset,
                                         dyntrans_layer_sizes=dyntrans_layer_sizes,
                                         global_pooling_schemes=global_pooling_schemes,
-                                        only_load_model=True,
+                                        only_load_model=only_load_model,
                                         accumulate_grad_batches=accumulate_grad_batches,
+                                        wandb=wandb,
                                         )
     
 

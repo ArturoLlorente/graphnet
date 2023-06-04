@@ -366,7 +366,7 @@ def train_and_predict_on_validation_set(
         logger= wandb_logger if wandb else None,
     )
     if only_load_model:
-        model.load_state_dict('/remote/ceph/user/l/llorente/northeren_tracks/dynedgeTITO_muon_entry_direction_reco_direction_InIceDSTPulses_150e_p10_max_pulses600_coarsening_none_rop_True_layersize3_nb6_state_dict.pth')
+        model.load_state_dict('/remote/ceph/user/l/llorente/northeren_tracks_Jun2/dynedgeTITO_muon_entry_direction_reco_direction_InIceDSTPulses_100e_p10_max_pulses600_coarsening_none_rop_True_layersize3_nb6.pth')
     else:   
         try:
             trainer.fit(model, training_dataloader, validation_dataloader)
@@ -419,13 +419,13 @@ def predict(model,
 if __name__ == "__main__":
     
     target = 'direction'
-    archive = "/remote/ceph/user/l/llorente/northeren_tracks_ensembled"
+    archive = "/remote/ceph/user/l/llorente/northeren_tracks_10e_test"
     weight_column_name = None 
     weight_table_name =  None
     batch_size = 128
-    CUDA_DEVICE = 1
+    CUDA_DEVICE = 2
     device = [CUDA_DEVICE] if CUDA_DEVICE is not None else None
-    n_epochs = 100
+    n_epochs = 10
     num_workers = 30
     patience = 10
     pulsemap = 'InIceDSTPulses'
@@ -446,7 +446,7 @@ if __name__ == "__main__":
     accumulate_grad_batches = 4
     wandb = False
     only_load_model = False
-    num_database_files = 2
+    num_database_files = 1
 
     
 

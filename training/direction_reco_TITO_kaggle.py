@@ -24,7 +24,7 @@ from graphnet.models.task.reconstruction import DirectionReconstructionWithKappa
 
 from graphnet.training.labels import Direction
 from graphnet.training.loss_functions import LogCoshLoss
-from graphnet.training.loss_functions import VonMisesFisher3DLoss
+from graphnet.training.loss_functions import VonMisesFisher3DLossTITO
 from graphnet.training.callbacks import ProgressBar, PiecewiseLinearLR
 from graphnet.training.utils import get_predictions, make_dataloader
 
@@ -108,7 +108,7 @@ def make_dataloaders(
     string_selection: List[int] = None,
     loss_weight_table: Optional[str] = None,
     loss_weight_column: Optional[str] = None,
-    index_column: str = 'event_no',
+    index_column: str = 'event_id',
     labels: Optional[Dict[str, Callable]] = None,
 ) -> DataLoader:
     
@@ -238,12 +238,6 @@ def make_dataloaders(
 
     return training_dataloader, validation_dataloader, test_dataloader
 
-def build_model(run_name, device, archive):
-    model = torch.load(os.path.join(archive, f"{run_name}.pth"),pickle_module=dill)
-    model.to('cuda:%s'%device[CUDA_DEVICE] if CUDA_DEVICE is not None else 'cpu')
-    model.eval()
-    model.inference()
-    return model 
 
 def train_and_predict_on_validation_set(
     *,
@@ -265,6 +259,8 @@ def train_and_predict_on_validation_set(
     wandb: bool = False,
     only_load_model: bool = False,
     accumulate_grad_batches: int = 2,
+    use_global_features: bool = True,
+    use_post_processing_layers: bool = True,
     ):
     print(f"features: {features}")
     print(f"truth: {truth}")
@@ -288,15 +284,19 @@ def train_and_predict_on_validation_set(
 
 
     # Building model
-    detector = IceCube86(graph_builder=KNNGraphBuilder(nb_nearest_neighbours=nb_nearest_neighbours))
+    detector = IceCube86(
+        graph_builder=KNNGraphBuilder(nb_nearest_neighbours=nb_nearest_neighbours, columns=[features_subset])
+        )
     
     gnn = DynEdgeTITO(
             nb_inputs=detector.nb_outputs,
             features_subset=features_subset,
             dyntrans_layer_sizes=dyntrans_layer_sizes,
             global_pooling_schemes=global_pooling_schemes,
+            use_global_features=use_global_features,
+            use_post_processing_layers=use_post_processing_layers,
             )
-    
+
     if target == 'classification_emuon_entry':
         task = IdentityTask(nb_outputs = 1,
                            hidden_size=gnn.nb_outputs,
@@ -311,27 +311,27 @@ def train_and_predict_on_validation_set(
         task = DirectionReconstructionWithKappa(
                            hidden_size=gnn.nb_outputs,
                            target_labels=target,
-                           loss_function=VonMisesFisher3DLoss(),  
-                           loss_weight = None,
+                           loss_function=VonMisesFisher3DLossTITO(),  
         )
         prediction_columns =["dir_x_pred", "dir_y_pred", "dir_z_pred", "dir_kappa_pred"]
-        additional_attributes=['zenith', 'azimuth', "event_no", "energy"]
+        additional_attributes=['zenith', 'azimuth', "event_id", "energy"]
     else:
         assert 1 == 2, "Task not found"
 
-    if rop:
-        scheduler_class = ReduceLROnPlateau
-        scheduler_kwargs = {'patience': 5}
-        scheduler_config = {'frequency': 1, 'monitor': 'val_loss'}
-    else:
-        scheduler_class= PiecewiseLinearLR,
-        scheduler_kwargs={
-            'milestones': [0, len(training_dataloader) / 2, len(training_dataloader) * n_epochs],
-            'factors': [1e-2, 1, 1e-02],
-        },
-        scheduler_config={
-            'interval': 'step',
-        },
+    scheduler_class= PiecewiseLinearLR,
+    scheduler_kwargs={
+        "milestones": [
+            0,
+            10  * len(training_dataloader)//(len(device)*accumulate_grad_batches),
+            len(training_dataloader)*n_epochs//(len(device)*accumulate_grad_batches*(20/10)),
+            len(training_dataloader)*n_epochs//(len(device)*accumulate_grad_batches[0]),                
+        ],
+        "factors": [1e-03, 1, 1, 1e-03],
+        "verbose": False,
+    },
+    scheduler_config={
+        "interval": "step",
+    },
 
 
     model = StandardModel(
@@ -343,7 +343,6 @@ def train_and_predict_on_validation_set(
         scheduler_class= scheduler_class,
         scheduler_kwargs=scheduler_kwargs,
         scheduler_config=scheduler_config,
-        coarsening = coarsening
      )
     
     # Training model
@@ -423,6 +422,7 @@ if __name__ == "__main__":
     weight_column_name = None 
     weight_table_name =  None
     batch_size = 128
+    n_round = 30
     CUDA_DEVICE = 2
     device = [CUDA_DEVICE] if CUDA_DEVICE is not None else None
     n_epochs = 10
@@ -432,7 +432,7 @@ if __name__ == "__main__":
     node_truth_table = None
     node_truth = None
     truth_table = 'truth'
-    index_column = 'event_no'
+    index_column = 'event_id'
     max_pulses = 600
     labels = {'direction': Direction()}
     coarsening = None #DOMCoarsening()
@@ -447,6 +447,8 @@ if __name__ == "__main__":
     wandb = False
     only_load_model = False
     num_database_files = 1
+    use_global_features = True,
+    use_post_processing_layers = True,
 
     
 
@@ -454,8 +456,8 @@ if __name__ == "__main__":
     torch.multiprocessing.set_sharing_strategy('file_system')
 
     # Constants
-    features = FEATURES.ICECUBE86
-    truth = TRUTH.ICECUBE86
+    features = FEATURES.KAGGLE
+    truth = TRUTH.KAGGLE
     
     all_databases = ['/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/dev_northern_tracks_muon_labels_v3_part_1.db',
                     '/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/dev_northern_tracks_muon_labels_v3_part_2.db',
@@ -471,16 +473,16 @@ if __name__ == "__main__":
     if num_database_files == 1:
         databases = all_databases[0]
         selection = all_selections[0]
-        selections = selection.loc[selection['n_pulses']<= max_pulses,:].sample(frac=1)['event_no'].ravel().tolist()
+        selections = selection.loc[selection['n_pulses']<= max_pulses,:].sample(frac=1)['event_id'].ravel().tolist()
     else:
         databases = all_databases[:num_database_files]
         selections = []
         for selection in all_selections[:num_database_files]:
-            selections.append(selection.loc[selection['n_pulses']<= max_pulses,:].sample(frac=1)['event_no'].ravel().tolist())
+            selections.append(selection.loc[selection['n_pulses']<= max_pulses,:].sample(frac=1)['event_id'].ravel().tolist())
 
     test_database = '/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/dev_northern_tracks_muon_labels_v3_part_5.db'
     test_selection = pd.read_csv('/home/iwsatlas1/oersoe/phd/northern_tracks/energy_reconstruction/selections/dev_northern_tracks_muon_labels_v3_part_5_regression_selection.csv')
-    test_selection = test_selection.loc[test_selection['n_pulses']<=max_pulses,:].sample(frac=1)['event_no'].ravel().tolist()
+    test_selection = test_selection.loc[test_selection['n_pulses']<=max_pulses,:].sample(frac=1)['event_id'].ravel().tolist()
 
     (training_dataloader, 
      validation_dataloader, 
@@ -505,7 +507,7 @@ if __name__ == "__main__":
                                         )
 
     
-    run_name = f"dynedgeTITO_muon_entry_direction_reco_{target}_{pulsemap}_{n_epochs}e_p{patience}_max_pulses{max_pulses}_coarsening_{'none' if coarsening is None else coarsening.__class__.__name__}_rop_{rop}_layersize{len(dyntrans_layer_sizes)}_nb{nb_nearest_neighbours}"
+    run_name = f"dynedgeTITO__direction_reco_{n_epochs}e_p{patience}_max_pulses{max_pulses}_layersize{len(dyntrans_layer_sizes)}_nb{nb_nearest_neighbours}_use_GG_{use_global_features}_use_PP_{use_post_processing_layers}_features_subset_{features_subset}_batch_{batch_size}_nround{n_round}"
     
     train_and_predict_on_validation_set(target=target,
                                         run_name=run_name,

@@ -97,15 +97,18 @@ class EdgeConvTito(MessagePassing, LightningModule):
     def forward(self, x: Union[Tensor, PairTensor], edge_index: Adj) -> Tensor:
         """Forward pass."""
         if isinstance(x, Tensor):
-            x = (x, x)
+            x: PairTensor = (x, x)
         # propagate_type: (x: PairTensor)
         return self.propagate(edge_index, x=x, size=None)
 
     def message(self, x_i: Tensor, x_j: Tensor) -> Tensor:
         """Edgeconvtito message passing."""
-        return self.nn(
-            torch.cat([x_i, x_j - x_i, x_j], dim=-1)
-        )  # EdgeConvTito
+        edge_cnt = round(x_i.shape[-1]*0.7)
+        if edge_cnt < 20:
+            edge_cnt = 4
+        edge_ij = torch.cat([(x_j - x_i)[:,:edge_cnt],x_j[:,edge_cnt:]], axis=-1)
+        
+        return self.nn(torch.cat([x_i, edge_ij], dim=-1)) ##edgeConvTito
 
     def __repr__(self) -> str:
         """Print out module name."""
@@ -168,6 +171,7 @@ class DynTrans(EdgeConvTito, LightningModule):
             d_model=d_model,
             nhead=n_head,
             batch_first=True,
+            dropout = 0.0,
             norm_first=False,
         )
         self._transformer_encoder = TransformerEncoder(

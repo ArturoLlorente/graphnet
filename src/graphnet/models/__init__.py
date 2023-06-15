@@ -10,3 +10,5 @@ GNN
 
 from .model import Model
 from .standard_model import StandardModel
+from .standard_model_TITO import StandardModelTito
+from .standard_model_softTITO import StandardModelSoftTito, StandardModel2

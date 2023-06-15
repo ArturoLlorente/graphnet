@@ -103,13 +103,8 @@ class EdgeConvTito(MessagePassing, LightningModule):
 
     def message(self, x_i: Tensor, x_j: Tensor) -> Tensor:
         """Edgeconvtito message passing."""
-        edge_cnt = round(x_i.shape[-1]*0.7)
-        if edge_cnt < 20:
-            edge_cnt = 4
-        edge_ij = torch.cat([(x_j - x_i)[:,:edge_cnt],x_j[:,edge_cnt:]], axis=-1)
+        return self.nn(torch.cat([x_i, x_j - x_i, x_j], dim=-1)) ##edgeConvTito
         
-        return self.nn(torch.cat([x_i, edge_ij], dim=-1)) ##edgeConvTito
-
     def __repr__(self) -> str:
         """Print out module name."""
         return f"{self.__class__.__name__}(nn={self.nn})"
@@ -162,6 +157,7 @@ class DynTrans(EdgeConvTito, LightningModule):
         super().__init__(nn=torch.nn.Sequential(*layers), aggr=aggr, **kwargs)
 
         # Additional member variables
+        self._nb_neighbors = 8
         self.features_subset = features_subset
 
         self.norm1 = LayerNorm(d_model, eps=1e-5)  # lNorm

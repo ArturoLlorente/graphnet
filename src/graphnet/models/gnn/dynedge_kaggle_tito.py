@@ -8,7 +8,7 @@ Kaggle competition.
 Solution by TITO.
 """
 
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Union
 
 import torch
 from torch import Tensor, LongTensor
@@ -37,7 +37,7 @@ class DynEdgeTITO(GNN):
     def __init__(
         self,
         nb_inputs: int,
-        features_subset: slice = slice(0, 4),
+        features_subset: Optional[Union[List[int], slice]] = None,
         dyntrans_layer_sizes: Optional[List[Tuple[int, ...]]] = None,
         global_pooling_schemes: List[str] = ["max"],
         use_global_features: bool = True,
@@ -55,6 +55,10 @@ class DynEdgeTITO(GNN):
             global_pooling_schemes: The list global pooling schemes to use.
                 Options are: "min", "max", "mean", and "sum".
         """
+        # Latent feature subset for computing nearest neighbours in DynEdge.
+        if features_subset is None:
+            features_subset = slice(0, 4) #4D
+        
         # DynEdge layer sizes
         if dyntrans_layer_sizes is None:
             dyntrans_layer_sizes = [
@@ -128,6 +132,7 @@ class DynEdgeTITO(GNN):
         self._activation = torch.nn.LeakyReLU()
         self._nb_inputs = nb_inputs
         self._nb_global_variables = 5 + nb_inputs
+        self._nb_neighbours = 8
         self._features_subset = features_subset
         self._use_global_features = use_global_features
         self._use_post_processing_layers = use_post_processing_layers
@@ -151,7 +156,7 @@ class DynEdgeTITO(GNN):
             self._conv_layers.append(conv_layer)
             nb_latent_features = sizes[-1]
 
-        nb_latent_features = self._dynedge_layer_sizes[-1][-1]
+        nb_latent_features = self._dyntrans_layer_sizes[-1][-1]
         
         if self._use_post_processing_layers:
             post_processing_layers = []

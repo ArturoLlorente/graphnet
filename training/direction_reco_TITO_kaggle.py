@@ -6,8 +6,10 @@ from tqdm.auto import tqdm
 import torch
 from torch.optim.adam import Adam
 
-from pytorch_lightning.callbacks import ModelCheckpoint, GradientAccumulationScheduler
-from pytorch_lightning.loggers import WandbLogger
+from pytorch_lightning.callbacks import ModelCheckpoint, GradientAccumulationScheduler, LearningRateMonitor
+from pytorch_lightning.loggers import WandbLogger 
+
+from pytorch_lightning.profiler import PyTorchProfiler
 
 from graphnet.data.dataset import Dataset, EnsembleDataset
 from graphnet.data.sqlite import SQLiteDataset
@@ -208,6 +210,7 @@ def make_dataloaders(
     loss_weight_column: Optional[str] = None,
     index_column: str = 'event_id',
     labels: Optional[Dict[str, Callable]] = None,
+    seed: Optional[int] = None,
 ) -> DataLoader:
     
     """Construct `DataLoader` instance."""
@@ -265,9 +268,10 @@ def make_dataloaders(
             batch_size=batch_size,
             shuffle=True,
             num_workers=num_workers,
-            collate_fn=collate_fn,
+            collate_fn=collate_fn_tito,
             persistent_workers=persistent_workers,
             prefetch_factor=2,
+            generator=torch.Generator().manual_seed(seed),
         )
             
                         
@@ -293,14 +297,16 @@ def make_dataloaders(
                 val_dataset.add_label(key=label, fn=labels[label])
         
         validation_dataloader = DataLoader(
-            train_dataset,
+            val_dataset,
             batch_size=batch_size,
             shuffle=False,
             num_workers=num_workers,
-            collate_fn=collate_fn,
+            collate_fn=collate_fn_tito,
             persistent_workers=persistent_workers,
             prefetch_factor=2,
+            generator=torch.Generator().manual_seed(seed),
         )
+        
                     
     return training_dataloader, validation_dataloader, train_dataset, val_dataset
 
@@ -318,6 +324,7 @@ def build_model(
     use_global_features: bool = True,
     use_post_processing_layers: bool = True,
     scheduler_class: Optional[type] = None,
+    scheduler_kwargs: Optional[dict] = None,
     dataset: Dataset = None,
     ):
     print(f"features: {features}")
@@ -363,17 +370,6 @@ def build_model(
     prediction_columns =['dir_x_pred', 'dir_y_pred', 'dir_z_pred', 'dir_kappa_pred']
     additional_attributes=['zenith', 'azimuth', 'event_id', 'energy']
 
-
-    scheduler_kwargs={
-        "milestones": [
-            0,
-            10  * len(training_dataloader)//(len(device)*accumulate_grad_batches[0]),
-            len(training_dataloader)*19500//(len(device)*accumulate_grad_batches[0]*(20/10)),  ## TODO: change to match TITO model
-            len(training_dataloader)*19500//(len(device)*accumulate_grad_batches[0]),                
-        ],
-        "factors": [1e-03, 1, 1, 1e-03],
-        "verbose": False,
-    }
     scheduler_config={
         "interval": "step",
     }
@@ -399,15 +395,15 @@ def build_model(
 if __name__ == "__main__":
     
     target = ['direction']
-    archive = "/remote/ceph/user/l/llorente/kaggle/trained_models"
+    archive = "/remote/ceph/user/l/llorente/training_1e_test/graphnet_model"
     weight_column_name = None 
     weight_table_name =  None
-    batch_size = 1000  
-    n_round = 30
+    batch_size = 1000
+    n_round = 1
     #CUDA_DEVICE = 0
     #device = [CUDA_DEVICE] if CUDA_DEVICE is not None else None
-    device = [0,1]
-    num_workers = 20
+    device = [1,2]
+    num_workers = 128
     pulsemap = 'pulse_table'
     node_truth_table = None
     node_truth = None
@@ -424,16 +420,26 @@ if __name__ == "__main__":
     accumulate_grad_batches = {0: 1}
     wandb = False
     only_load_model = False
-    num_database_files = 12
+    num_database_files = 1
     use_global_features = True
     use_post_processing_layers = True
     train_max_pulses = 200
     val_max_pulses = 200
     scheduler_class = PiecewiseLinearLR
+    seed = 42
     
 
     
+    def set_seed(seed):
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
 
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
+    set_seed(seed=seed)
 
     # Configurations
     torch.multiprocessing.set_sharing_strategy('file_system')
@@ -442,29 +448,31 @@ if __name__ == "__main__":
     features = FEATURES.KAGGLE
     truth = TRUTH.KAGGLE
     
+    
+    database_path = '/mnt/scratch/kaggle_datasets/databases_merged/'
     all_databases = []
     selection_files = []
-    #for i in range(num_database_files):
-    #    all_databases.append('/remote/ceph/user/l/llorente/kaggle/databases_merged/batch_%02d.db'%(i+1))
-    #    selection_files.append(pd.read_csv('/remote/ceph/user/l/llorente/kaggle/selection_files/pulse_information_%02d.csv'%(i+1)))
+    for i in range(num_database_files):
+        all_databases.append(database_path + 'batch_%02d.db'%(i+1))
+        selection_files.append(pd.read_csv('/remote/ceph/user/l/llorente/kaggle/selection_files/pulse_information_%02d.csv'%(i+1)))
     
-    all_databases = ['/remote/ceph/user/l/llorente/kaggle/databases_testing/batch_test_1.db']
-    #                 '/remote/ceph/user/l/llorente/kaggle/databases_testing/batch_test_2.db',
-    #                 '/remote/ceph/user/l/llorente/kaggle/databases_testing/batch_test_3.db',]
-    selection_files = [pd.read_csv('/remote/ceph/user/l/llorente/kaggle/databases_testing/batch_test_1_pulses.csv')]
-    #                   pd.read_csv('/remote/ceph/user/l/llorente/kaggle/databases_testing/batch_test_2_pulses.csv'),
-    #                   pd.read_csv('/remote/ceph/user/l/llorente/kaggle/databases_testing/batch_test_3_pulses.csv'),]
+    #all_databases = ['/remote/ceph/user/l/llorente/kaggle/databases_testing/batch_test_1.db',
+    #                 '/remote/ceph/user/l/llorente/kaggle/databases_testing/batch_test_2.db']
+                     #'/remote/ceph/user/l/llorente/kaggle/databases_testing/batch_test_3.db',]
+    #selection_files = [pd.read_csv('/remote/ceph/user/l/llorente/kaggle/databases_testing/batch_test_1_pulses.csv'),
+    #                   pd.read_csv('/remote/ceph/user/l/llorente/kaggle/databases_testing/batch_test_2_pulses.csv')]
+                       #pd.read_csv('/remote/ceph/user/l/llorente/kaggle/databases_testing/batch_test_3_pulses.csv'),]
     
     # get_list_of_databases:
     selections = []
     for selection in selection_files:
-        selections.append(selection.loc[selection['n_pulses']<= train_max_pulses,:].sample(frac=1)['event_id'].ravel().tolist())
+        selections.append(selection.loc[selection['n_pulses'] < train_max_pulses,:]['event_id'].ravel().tolist())
 
-    #val_database = '/remote/ceph/user/l/llorente/kaggle/databases_merged/batch_val.db'
-    #val_selection_file = pd.read_csv('/remote/ceph/user/l/llorente/kaggle/selection_files/pulse_information_val.csv')
-    val_database = '/remote/ceph/user/l/llorente/kaggle/databases_testing/batch_test_val.db'
-    val_selection_file = pd.read_csv('/remote/ceph/user/l/llorente/kaggle/databases_testing/batch_test_val_pulses.csv')
-    val_selection = val_selection_file.loc[val_selection_file['n_pulses']<=val_max_pulses,:].sample(frac=1)['event_id'].ravel().tolist()
+    val_database = '/remote/ceph/user/l/llorente/kaggle/databases_merged/batch_val.db'
+    val_selection_file = pd.read_csv('/remote/ceph/user/l/llorente/kaggle/selection_files/pulse_information_val.csv')
+    #val_database = '/remote/ceph/user/l/llorente/kaggle/databases_testing/batch_test_val.db'
+    #val_selection_file = pd.read_csv('/remote/ceph/user/l/llorente/kaggle/databases_testing/batch_test_val_pulses.csv')
+    val_selection = val_selection_file.loc[val_selection_file['n_pulses']<val_max_pulses,:].sample(frac=1)['event_id'].ravel().tolist()
 
     print("Loading databases")
 
@@ -489,10 +497,24 @@ if __name__ == "__main__":
                                         loss_weight_column=None,
                                         index_column=index_column,
                                         labels=labels,
+                                        seed=seed,
                                         )
 
     
-    run_name = f"dynedgeTITO__direction_reco_{n_round}e_train_max_pulses{train_max_pulses}_val_max_pulses{val_max_pulses}_layersize{len(dyntrans_layer_sizes)}_use_GG_{use_global_features}_use_PP_{use_post_processing_layers}_features_subset_{features_subset}_batch_{batch_size}_nround{n_round}"
+    run_name = f"dynedgeTITO__direction_reco_{n_round}e_train_max_pulses{train_max_pulses}_val_max_pulses{val_max_pulses}_layersize{len(dyntrans_layer_sizes)}_use_GG_{use_global_features}_use_PP_{use_post_processing_layers}_features_subset_{features_subset}_batch_{batch_size}_nround{n_round}_testing_db"
+    
+    scheduler_kwargs={
+        "milestones": [
+            0,
+            10  * len(training_dataloader)//(len(device)*accumulate_grad_batches[0]*num_database_files*55*n_round),
+            len(training_dataloader)//(len(device)*accumulate_grad_batches[0]*(20/10)),
+            len(training_dataloader)//(len(device)*accumulate_grad_batches[0]),                
+        ],
+        "factors": [1e-03, 1, 1, 1e-03],
+        "verbose": False,
+    }
+
+    print(f"milestones are: {scheduler_kwargs['milestones']}")
     
     print("Starting training")
     model = build_model(target=target,
@@ -504,6 +526,7 @@ if __name__ == "__main__":
                           accumulate_grad_batches=accumulate_grad_batches,
                           wandb=wandb,
                           scheduler_class=scheduler_class,
+                          scheduler_kwargs=scheduler_kwargs,
                           dataset=train_dataset,
                           )
     
@@ -511,8 +534,8 @@ if __name__ == "__main__":
     # Training model
     callbacks = [
         ModelCheckpoint(
-            dirpath=archive,
-            filename=run_name+'-{epoch:02d}-{val_tloss:.6f}',
+            dirpath=archive+'/model_checkpoint_graphnet/',
+            filename=run_name+'-{epoch:02d}-{val_loss:.6f}',
             monitor= 'val_loss',
             save_top_k = 30,
             every_n_epochs = 1,
@@ -520,7 +543,7 @@ if __name__ == "__main__":
         ),
         ProgressBar(),
         GradientAccumulationScheduler(scheduling=accumulate_grad_batches),
-        
+        LearningRateMonitor(logging_interval='step'),
     ]
 
     if len(device) > 1:
@@ -528,18 +551,20 @@ if __name__ == "__main__":
     else:
         distribution_strategy = None
 
-    model.fit(
-        training_dataloader,
-        validation_dataloader,
-        callbacks=callbacks,
-        max_epochs=n_round,
-        gpus=device,
-        distribution_strategy=distribution_strategy,
-        check_val_every_n_epoch=1,
-        precision=16,
-        #reload_dataloaders_every_n_epochs=1,
-    )
+##    model.fit(
+##        training_dataloader,
+##        validation_dataloader,
+##        callbacks=callbacks,
+##        max_epochs=n_round,
+##        gpus=device,
+##        distribution_strategy=distribution_strategy,
+##        check_val_every_n_epoch=1,
+##        precision=16,
+##        logger=WandbLogger(project='train_6batch_1e_graphnet', name=run_name),
+##        profiler=PyTorchProfiler( output_filename='profiler_results.txt', trace_every_n_steps=1),
+##        #reload_dataloaders_every_n_epochs=1,
+##    )
         
-    model.save(os.path.join(archive, f"{run_name}.pth"))
-    model.save_state_dict(os.path.join(archive, f"{run_name}_state_dict.pth"))
-    print(f"Model saved to {archive}/{run_name}.pth")
+    #model.save(os.path.join(archive, f"{run_name}.pth"))
+    #model.save_state_dict(os.path.join(archive, f"{run_name}_state_dict.pth"))
+    #print(f"Model saved to {archive}/{run_name}.pth")

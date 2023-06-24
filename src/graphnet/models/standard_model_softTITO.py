@@ -312,24 +312,26 @@ class StandardModel2(Model):
 
     def forward(self, data: Data) -> List[Union[Tensor, Data]]:
         """Forward pass, chaining model components."""
-        #import pdb;pdb.set_trace()
         if self._coarsening:
             data = self._coarsening(data)
 
-        data = self._detector(data)
-        x = self._gnn(data)
-
+        x_list = []
+        for i,d in enumerate(data):
+            d = self._detector(d)
+            x = self._gnn(d)
+            x_list.append(x)
+        x = torch.cat(x_list)
+        
         preds = [task(x) for task in self._tasks]
-        #preds = [self._tasks[0](x)]
-        #cols = ['direction','zenith','azimuth','event_id']
-        #for col in cols:
-        #data['direction'] = torch.cat([d['direction'] for d in data])
-        return preds
+        cols = ['direction','zenith','azimuth','event_id']
+        for col in cols:
+            data[0][col] = torch.cat([d[col] for d in data])
+        return preds, data[0]
 
     def training_step(self, train_batch: Data, batch_idx: int) -> Tensor:
         """Perform training step."""
         #TODO1
-        preds = self(train_batch)
+        preds, train_batch = self(train_batch)
         losses = self._tasks[0].compute_loss(preds[0], train_batch)
         loss = torch.sum(losses)
         
@@ -337,7 +339,7 @@ class StandardModel2(Model):
 
     def validation_step(self, val_batch: Data, batch_idx: int) -> Tensor:
         """Perform validation step."""
-        preds = self(val_batch)
+        preds, val_batch = self(val_batch)
         losses = self._tasks[0].compute_loss(preds[0], val_batch)
         loss = torch.sum(losses)
         

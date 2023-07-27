@@ -7,7 +7,6 @@ from torch.optim import Adam
 from torch.utils.data import DataLoader
 from torch_geometric.data import Data
 
-from graphnet.data.dataset import Dataset
 from graphnet.models.coarsening import Coarsening
 from graphnet.utilities.config import save_model_config
 from graphnet.models.detector.detector import Detector
@@ -32,8 +31,6 @@ class StandardModelTito(Model):
         detector: Detector,
         gnn: GNN,
         tasks: Union[Task, List[Task]],
-        dataset: Dataset,
-        max_epochs: 0,
         coarsening: Optional[Coarsening] = None,
         optimizer_class: type = Adam,
         optimizer_kwargs: Optional[Dict] = None,
@@ -64,8 +61,6 @@ class StandardModelTito(Model):
         self._scheduler_class = scheduler_class
         self._scheduler_kwargs = scheduler_kwargs or dict()
         self._scheduler_config = scheduler_config or dict()
-        self._dataset = dataset
-        self._max_epochs = max_epochs
         self.timer = defaultdict(int)
         
     def print_timer(self):
@@ -96,49 +91,54 @@ class StandardModelTito(Model):
 
     def forward(self, data: Data) -> List[Union[Tensor, Data]]:
         """Forward pass, chaining model components."""
-        #import pdb;pdb.set_trace()
         if self._coarsening:
             data = self._coarsening(data)
-        #data = self._detector(data)
-        #x = self._gnn(data)
+
         x_list = []
-        for i,d in enumerate(data):
-            st = time.time()
+        for d in data:
             d = self._detector(d)
-            #self.timer[f'detector_{i}'] += time.time()-st; st = time.time()
             x = self._gnn(d)
-            #self.timer[f'gnn_{i}'] += time.time()-st; st = time.time()
             x_list.append(x)
         x = torch.cat(x_list)
-        #preds = [task(x) for task in self._tasks]
-        #self.timer[f'task'] += time.time()-st; st = time.time()
+
         preds = [self._tasks[0](x)]
-        cols = ['direction','zenith','azimuth','event_id']
+        cols = ['direction','zenith','azimuth','event_no']
         for col in cols:
             data[0][col] = torch.cat([d[col] for d in data])
-        #self.timer[f'fix_col'] += time.time()-st; st = time.time()
-        #self.print_timer()
+            
         return preds, data[0]
 
     def training_step(self, train_batch: Data, batch_idx: int) -> Tensor:
         """Perform training step."""
-        #TODO1
         preds, train_batch = self(train_batch)
         losses = self._tasks[0].compute_loss(preds[0], train_batch)
         loss = torch.sum(losses)
-
-        #x = self.current_epoch/self._max_epochs
-        #x = 0.5 + x/2
-        #y = 1-x
-        #loss = vloss*y + tloss*x
-        return {"loss": loss}
+        self.log(
+            "train_loss",
+            loss,
+            batch_size=self._get_batch_size(train_batch),
+            prog_bar=True,
+            on_epoch=True,
+            on_step=False,
+            sync_dist=True,
+        )
+        return loss
 
     def validation_step(self, val_batch: Data, batch_idx: int) -> Tensor:
         """Perform validation step."""
         preds, val_batch = self(val_batch)        
         losses = self._tasks[0].compute_loss(preds[0], val_batch)
         loss = torch.sum(losses)
-        return {"loss": loss}
+        self.log(
+            "val_loss",
+            loss,
+            batch_size=self._get_batch_size(val_batch),
+            prog_bar=True,
+            on_epoch=True,
+            on_step=False,
+            sync_dist=True,
+        )
+        return loss
 
     def _get_batch_size(self, data: Data) -> int:
         return torch.numel(torch.unique(data.batch))
@@ -170,21 +170,3 @@ class StandardModelTito(Model):
             distribution_strategy=distribution_strategy,
         )
     
-    def training_epoch_end(self, training_step_outputs):
-        loss = torch.stack([x["loss"] for x in training_step_outputs]).mean()
-        self.log_dict(
-            {"trn_loss": loss},
-            prog_bar=True,
-            sync_dist=True,
-        )
-        print(f'epoch:{self.current_epoch}, train loss:{loss.item()}')
-        self._dataset.reset_epoch()
-        
-    def validation_epoch_end(self, validation_step_outputs):
-        loss = torch.stack([x["loss"] for x in validation_step_outputs]).mean()
-        self.log_dict(
-            {"val_loss": loss},
-            prog_bar=True,
-            sync_dist=True,
-        )
-        print(f'epoch:{self.current_epoch}, valid loss:{loss.item()}')

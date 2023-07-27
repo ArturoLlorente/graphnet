@@ -211,3 +211,28 @@ class InelasticityReconstruction(Task):
     def _forward(self, x: Tensor) -> Tensor:
         # Transform output to unit range
         return torch.sigmoid(x)
+    
+    
+class DirectionReconstructionWithKappaTITO(Task):
+    """Reconstructs direction with kappa from the 3D-vMF distribution."""
+
+    # Requires three features: untransformed points in (x,y,z)-space.
+    default_target_labels = [
+        "direction"
+    ]  # contains dir_x, dir_y, dir_z see https://github.com/graphnet-team/graphnet/blob/95309556cfd46a4046bc4bd7609888aab649e295/src/graphnet/training/labels.py#L29
+    default_prediction_labels = [
+        "dir_x_pred",
+        "dir_y_pred",
+        "dir_z_pred",
+        "direction_kappa",
+    ]
+    nb_inputs = 3
+
+    def _forward(self, x: Tensor) -> Tensor:
+        # Transform outputs to angle and prepare prediction
+        kappa = torch.linalg.vector_norm(x, dim=1)# + eps_like(x)
+        kappa = torch.clamp(kappa, min=torch.finfo(x.dtype).eps)
+        vec_x = x[:, 0] / kappa
+        vec_y = x[:, 1] / kappa
+        vec_z = x[:, 2] / kappa
+        return torch.stack((vec_x, vec_y, vec_z, kappa), dim=1)

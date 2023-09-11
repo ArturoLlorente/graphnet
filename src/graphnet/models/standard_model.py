@@ -101,8 +101,12 @@ class StandardModel(Model):
         """Forward pass, chaining model components."""
         if self._coarsening:
             data = self._coarsening(data)
-        data = self._detector(data)
-        x = self._gnn(data)
+        x_list = []
+        for d in data:
+            d = self._detector(d)
+            x = self._gnn(d)
+            x_list.append(x)
+        x = torch.cat(x_list, dim=0)
         preds = [task(x) for task in self._tasks]
         return preds
 
@@ -118,6 +122,8 @@ class StandardModel(Model):
 
     def training_step(self, train_batch: Data, batch_idx: int) -> Tensor:
         """Perform training step."""
+        if isinstance(train_batch, Data):
+            train_batch = [train_batch]
         loss = self.shared_step(train_batch, batch_idx)
         self.log(
             "train_loss",
@@ -132,6 +138,8 @@ class StandardModel(Model):
 
     def validation_step(self, val_batch: Data, batch_idx: int) -> Tensor:
         """Perform validation step."""
+        if isinstance(val_batch, Data):
+            val_batch = [val_batch]
         loss = self.shared_step(val_batch, batch_idx)
         self.log(
             "val_loss",
@@ -148,8 +156,11 @@ class StandardModel(Model):
         self, preds: Tensor, data: Data, verbose: bool = False
     ) -> Tensor:
         """Compute and sum losses across tasks."""
+        target_labels = set([task._target_labels[0] for task in self._tasks])
+        for label in target_labels:
+            data[0][label] = torch.cat([d[label] for d in data], dim=0)
         losses = [
-            task.compute_loss(pred, data)
+            task.compute_loss(pred, data[0])
             for task, pred in zip(self._tasks, preds)
         ]
         if verbose:
@@ -160,7 +171,8 @@ class StandardModel(Model):
         return torch.sum(torch.stack(losses))
 
     def _get_batch_size(self, data: Data) -> int:
-        return torch.numel(torch.unique(data.batch))
+        data[0].batch = torch.cat([d.batch for d in data], dim=0)
+        return torch.numel(torch.unique(data[0].batch))
 
     def inference(self) -> None:
         """Activate inference mode."""
@@ -179,7 +191,7 @@ class StandardModel(Model):
         self,
         dataloader: DataLoader,
         gpus: Optional[Union[List[int], int]] = None,
-        distribution_strategy: Optional[str] = None,
+        distribution_strategy: Optional[str] = "auto",
     ) -> List[Tensor]:
         """Return predictions for `dataloader`."""
         self.inference()
@@ -198,7 +210,7 @@ class StandardModel(Model):
         additional_attributes: Optional[List[str]] = None,
         index_column: str = "event_no",
         gpus: Optional[Union[List[int], int]] = None,
-        distribution_strategy: Optional[str] = None,
+        distribution_strategy: Optional[str] = "auto",
     ) -> pd.DataFrame:
         """Return predictions for `dataloader` as a DataFrame.
 

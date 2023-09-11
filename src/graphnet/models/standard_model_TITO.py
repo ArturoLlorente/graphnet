@@ -102,7 +102,7 @@ class StandardModelTito(Model):
         x = torch.cat(x_list)
 
         preds = [self._tasks[0](x)]
-        cols = ['direction','zenith','azimuth','event_no']
+        cols = ['direction','zenith','azimuth','event_id']
         for col in cols:
             data[0][col] = torch.cat([d[col] for d in data])
             

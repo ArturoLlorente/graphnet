@@ -363,28 +363,16 @@ if __name__ == "__main__":
     
     run_name = f"dynedgeTITO__direction_reco_{n_round}e_train_max_pulses{train_max_pulses}_val_max_pulses{val_max_pulses}_layersize{len(dyntrans_layer_sizes)}_use_GG_{use_global_features}_use_PP_{use_post_processing_layers}_batch_{batch_size}_nround{n_round}_testing_db"
     
-    if device is not None:
-        scheduler_kwargs={
-            "milestones": [
-                0,
-                10  * len(training_dataloader)//(len(device)*accumulate_grad_batches[0]*n_round),
-                len(training_dataloader)//(len(device)*accumulate_grad_batches[0]*(20/10)),
-                len(training_dataloader)//(len(device)*accumulate_grad_batches[0]),                
-            ],
-            "factors": [1e-03, 1, 1, 1e-03],
-            "verbose": False,
-        }
-    else:
-        scheduler_kwargs={
-            "milestones": [
-                0,
-                10  * len(training_dataloader)//(accumulate_grad_batches[0]*num_database_files*55*n_round),
-                len(training_dataloader)//(accumulate_grad_batches[0]*(20/10)),
-                len(training_dataloader)//(accumulate_grad_batches[0]),                
-            ],
-            "factors": [1e-03, 1, 1, 1e-03],
-            "verbose": False,
-        }
+    scheduler_kwargs={
+        "milestones": [
+            0,
+            10  * len(training_dataloader)//(len(device)*accumulate_grad_batches[0]*n_round*100),
+            len(training_dataloader)//(2*len(device)*accumulate_grad_batches[0]),
+            len(training_dataloader)//(len(device)*accumulate_grad_batches[0]),                
+        ],
+        "factors": [1e-03, 1, 1, 1e-03],
+        "verbose": False,
+    }
 
     print("Starting training")
     model = build_model(graph_definition=graph_definition,

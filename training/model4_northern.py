@@ -186,6 +186,7 @@ def inference(device: int,
                 test_max_pulses: int,
                 batch_size: int,
                 use_all_features_in_prediction: bool = True,
+                graph_definition: Optional[KNNGraph] = None,
             ):
     test_path = '/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/dev_northern_tracks_muon_labels_v3_part_5.db'
     test_selection_file = pd.read_csv('/home/iwsatlas1/oersoe/phd/northern_tracks/energy_reconstruction/selections/dev_northern_tracks_muon_labels_v3_part_5_regression_selection.csv')
@@ -194,6 +195,7 @@ def inference(device: int,
     test_dataloader =  make_dataloader(db = test_path,
                                         selection = test_selection,
                                         pulsemaps = 'pulse_table',
+                                        graph_definition = graph_definition,
                                         num_workers = 64,
                                         features = FEATURES.ICECUBE86,
                                         shuffle = False,
@@ -268,7 +270,7 @@ if __name__ == "__main__":
     weight_table_name =  None
     batch_size = 256
     n_epochs = 50
-    device = [1]
+    device = [3]
     num_workers = 16
     pulsemap = 'InIceDSTPulses'
     node_truth_table = None
@@ -284,15 +286,13 @@ if __name__ == "__main__":
     scheduler_class = PiecewiseLinearLR
     wandb = False
 
-    MODEL = 'model1'
     ## Diferent models
     use_global_features = True
     use_post_processing_layers = True
     dyntrans_layer_sizes = [(256, 256),
                             (256, 256),
-                            (256, 256),
                             (256, 256)]
-    columns_nearest_neighbours = [0, 1, 2]
+    columns_nearest_neighbours = [0, 1, 2, 3]
 
 
     # Configurations
@@ -358,7 +358,7 @@ if __name__ == "__main__":
 
     
 
-    run_name = f"model1_dynedgeTITO__directionReco_{n_epochs}e_trainMaxPulses{train_max_pulses}_valMaxPulses{val_max_pulses}_layerSize{len(dyntrans_layer_sizes)}_useGG{use_global_features}_usePP{use_post_processing_layers}_batch{batch_size}_nround{n_epochs}_numDatabaseFiles{num_database_files}"
+    run_name = f"model4_dynedgeTITO__directionReco_{n_epochs}e_trainMaxPulses{train_max_pulses}_valMaxPulses{val_max_pulses}_layerSize{len(dyntrans_layer_sizes)}_useGG{use_global_features}_usePP{use_post_processing_layers}_batch{batch_size}_nround{n_epochs}_numDatabaseFiles{num_database_files}"
     
     print("number of batches in each epoch", batch_size*len(train_dataset))
     scheduler_kwargs={

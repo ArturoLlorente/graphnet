@@ -2,6 +2,7 @@ import os
 import numpy as np
 import pandas as pd
 from tqdm.auto import tqdm
+import gc
 
 import torch
 from torch.optim.adam import Adam
@@ -14,7 +15,7 @@ from graphnet.data.dataset import EnsembleDataset
 from graphnet.data.dataset import SQLiteDataset
 from graphnet.data.constants import FEATURES, TRUTH
 
-from graphnet.models import StandardModel
+from graphnet.models import StandardModel, StandardModelPred
 from graphnet.models.detector.icecube import IceCube86
 from graphnet.models.graphs import KNNGraph
 from graphnet.models.gnn import DynEdgeTITO
@@ -30,6 +31,16 @@ from graphnet.utilities.logging import Logger
 
 from typing import Dict, List, Optional, Union, Callable, Tuple
 from torch.utils.data import DataLoader
+
+use_global_features_all = {'model1': True, 'model2': True, 'model3': False, 'model4': True, 'model5': True, 'model6': True}
+use_post_processing_layers_all = {'model1': True, 'model2': True, 'model3': False, 'model4': True, 'model5': True, 'model6': True}
+dyntrans_layer_sizes_all = {'model1': [(256, 256), (256, 256), (256, 256), (256, 256)],
+                        'model2': [(256, 256), (256, 256), (256, 256), (256, 256)],
+                        'model3': [(256, 256), (256, 256), (256, 256)],
+                        'model4': [(256, 256), (256, 256), (256, 256)],
+                        'model5': [(256, 256), (256, 256), (256, 256), (256, 256)],
+                        'model6': [(256, 256), (256, 256), (256, 256), (256, 256)]}
+columns_nearest_neighbours_all = {'model1': [0, 1, 2], 'model2': [0, 1, 2], 'model3': [0, 1, 2], 'model4': [0, 1, 2, 3], 'model5': [0, 1, 2], 'model6': [0, 1, 2, 3]}
     
 def make_dataloaders(
     db: Union[List[str], str],
@@ -164,17 +175,28 @@ def build_model(
             "interval": "step",
         }
 
-
-    model = StandardModel(
-            graph_definition=graph_definition,
-            gnn=gnn,
-            tasks=[task],
-            optimizer_class=Adam,
-            optimizer_kwargs={'lr': 1e-03, 'eps': 1e-03},
-            scheduler_class= scheduler_class,
-            scheduler_kwargs=scheduler_kwargs,
-            scheduler_config=scheduler_config,
-        )
+    if INFERENCE:
+        model = StandardModelPred(
+                graph_definition=graph_definition,
+                gnn=gnn,
+                tasks=[task],
+                optimizer_class=Adam,
+                optimizer_kwargs={'lr': 1e-03, 'eps': 1e-03},
+                scheduler_class= scheduler_class,
+                scheduler_kwargs=scheduler_kwargs,
+                scheduler_config=scheduler_config,
+            )
+    else:
+        model = StandardModel(
+                graph_definition=graph_definition,
+                gnn=gnn,
+                tasks=[task],
+                optimizer_class=Adam,
+                optimizer_kwargs={'lr': 1e-03, 'eps': 1e-03},
+                scheduler_class= scheduler_class,
+                scheduler_kwargs=scheduler_kwargs,
+                scheduler_config=scheduler_config,
+            )
     model.prediction_columns = prediction_columns
     model.additional_attributes = additional_attributes
     
@@ -182,10 +204,12 @@ def build_model(
 
 
 def inference(device: int,
+                checkpoint_path: str,
                 test_min_pulses: int,
                 test_max_pulses: int,
                 batch_size: int,
                 use_all_features_in_prediction: bool = True,
+                graph_definition: Optional[KNNGraph] = None,
             ):
     test_path = '/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/dev_northern_tracks_muon_labels_v3_part_5.db'
     test_selection_file = pd.read_csv('/home/iwsatlas1/oersoe/phd/northern_tracks/energy_reconstruction/selections/dev_northern_tracks_muon_labels_v3_part_5_regression_selection.csv')
@@ -193,28 +217,29 @@ def inference(device: int,
 
     test_dataloader =  make_dataloader(db = test_path,
                                         selection = test_selection,
-                                        pulsemaps = 'pulse_table',
-                                        num_workers = 64,
+                                        graph_definition = graph_definition,
+                                        pulsemaps = 'InIceDSTPulses',
+                                        num_workers = 10,
                                         features = FEATURES.ICECUBE86,
                                         shuffle = False,
                                         truth = TRUTH.ICECUBE86,
                                         batch_size = batch_size,
-                                        truth_table = 'meta_table',
+                                        truth_table = 'truth',
                                         index_column='event_no',
                                         labels = {'direction': Direction()},  
                                         )
     
-    model = build_model(dyntrans_layer_sizes=dyntrans_layer_sizes,
+
+    model = build_model(graph_definition=graph_definition,
+                        dyntrans_layer_sizes=dyntrans_layer_sizes,
                         global_pooling_schemes=global_pooling_schemes,
                         use_global_features=use_global_features,
                         use_post_processing_layers=use_post_processing_layers,
                         scheduler_class=scheduler_class,
                         scheduler_kwargs=scheduler_kwargs,
                         )
-    
     model.eval()
     model.inference()
-    checkpoint_path = f'/remote/ceph/user/l/llorente/tito_solution/northeren_tracks_Oct3/model1-1e.pth'
     checkpoint = torch.load(checkpoint_path, torch.device('cpu'))
     
     if 'state_dict' in checkpoint:
@@ -222,7 +247,7 @@ def inference(device: int,
     model.load_state_dict(checkpoint)
 
 
-    event_ids = []
+    event_nos = []
     zenith = []
     azimuth = []
     preds = []
@@ -237,7 +262,7 @@ def inference(device: int,
                 preds.append(torch.cat(pred, axis=-1))
             else:
                 preds.append(pred[0])
-            event_ids.append(batch.event_no)
+            event_nos.append(batch.event_no)
             if validateMode:
                 zenith.append(batch.zenith)
                 azimuth.append(batch.azimuth)
@@ -253,7 +278,7 @@ def inference(device: int,
         columns = ['direction_x','direction_y','direction_z','direction_kappa']
         
     results = pd.DataFrame(preds, columns=columns)
-    results['event_no'] = torch.cat(event_ids).to('cpu').detach().numpy()
+    results['event_no'] = torch.cat(event_nos).to('cpu').detach().numpy()
     if validateMode:
         results['zenith'] = torch.cat(zenith).to('cpu').numpy()
         results['azimuth'] = torch.cat(azimuth).to('cpu').numpy()
@@ -268,7 +293,7 @@ if __name__ == "__main__":
     weight_table_name =  None
     batch_size = 256
     n_epochs = 50
-    device = [1]
+    device = [2]
     num_workers = 16
     pulsemap = 'InIceDSTPulses'
     node_truth_table = None
@@ -283,17 +308,20 @@ if __name__ == "__main__":
     val_max_pulses = 300
     scheduler_class = PiecewiseLinearLR
     wandb = False
-
-    MODEL = 'model1'
+    INFERENCE = False
     ## Diferent models
-    use_global_features = True
-    use_post_processing_layers = True
-    dyntrans_layer_sizes = [(256, 256),
-                            (256, 256),
-                            (256, 256),
-                            (256, 256)]
-    columns_nearest_neighbours = [0, 1, 2]
 
+
+    MODEL = 'model3'
+    use_global_features = use_global_features_all[MODEL]
+    use_post_processing_layers = use_post_processing_layers_all[MODEL]
+    dyntrans_layer_sizes = dyntrans_layer_sizes_all[MODEL]
+    columns_nearest_neighbours = columns_nearest_neighbours_all[MODEL]
+
+
+    run_name = (f"{MODEL}_dynedgeTITO__directionReco_{n_epochs}e_trainMaxPulses{train_max_pulses}_valMaxPulses{val_max_pulses}"
+                f"_layerSize{len(dyntrans_layer_sizes)}_useGG{use_global_features}_usePP{use_post_processing_layers}_batch{batch_size}"
+                f"_nround{n_epochs}_numDatabaseFiles{num_database_files}")
 
     # Configurations
     torch.multiprocessing.set_sharing_strategy('file_system')
@@ -332,45 +360,61 @@ if __name__ == "__main__":
         columns=columns_nearest_neighbours,
     )
 
-    (training_dataloader, 
-     validation_dataloader,
-     train_dataset, 
-     val_dataset) = make_dataloaders(db=all_databases,
-                                        graph_definition=graph_definition,
-                                        pulsemaps=pulsemap,
-                                        features=features,
-                                        truth=truth,
-                                        batch_size=batch_size,
-                                        train_selection=train_selections,
-                                        val_selection=val_selection,
-                                        num_workers=num_workers,
-                                        persistent_workers=True,
-                                        node_truth=node_truth,
-                                        truth_table=truth_table,
-                                        node_truth_table=node_truth_table,
-                                        string_selection=None,
-                                        loss_weight_table=None,
-                                        loss_weight_column=None,
-                                        index_column=index_column,
-                                        labels=labels,
-                                        collate_fn=collator_sequence_buckleting(),
-                                        )
+
 
     
+    if INFERENCE:
+        scheduler_kwargs=None
+    else:
+        (training_dataloader, 
+        validation_dataloader,
+        train_dataset, 
+        val_dataset) = make_dataloaders(db=all_databases,
+                                            graph_definition=graph_definition,
+                                            pulsemaps=pulsemap,
+                                            features=features,
+                                            truth=truth,
+                                            batch_size=batch_size,
+                                            train_selection=train_selections,
+                                            val_selection=val_selection,
+                                            num_workers=num_workers,
+                                            persistent_workers=True,
+                                            node_truth=node_truth,
+                                            truth_table=truth_table,
+                                            node_truth_table=node_truth_table,
+                                            string_selection=None,
+                                            loss_weight_table=None,
+                                            loss_weight_column=None,
+                                            index_column=index_column,
+                                            labels=labels,
+                                            collate_fn=collator_sequence_buckleting(),
+                                            )
+        scheduler_kwargs={
+            "milestones": [
+                0,
+                len(training_dataloader)//(len(device)*accumulate_grad_batches[0]*30),
+                len(training_dataloader)*n_epochs//(len(device)*accumulate_grad_batches[0]*2),
+                len(training_dataloader)*n_epochs//(len(device)*accumulate_grad_batches[0]),                
+            ],
+            "factors": [1e-03, 1, 1, 1e-03],
+            "verbose": False,
+        }
 
-    run_name = f"model1_dynedgeTITO__directionReco_{n_epochs}e_trainMaxPulses{train_max_pulses}_valMaxPulses{val_max_pulses}_layerSize{len(dyntrans_layer_sizes)}_useGG{use_global_features}_usePP{use_post_processing_layers}_batch{batch_size}_nround{n_epochs}_numDatabaseFiles{num_database_files}"
-    
-    print("number of batches in each epoch", batch_size*len(train_dataset))
-    scheduler_kwargs={
-        "milestones": [
-            0,
-            len(training_dataloader)//(len(device)*accumulate_grad_batches[0]*30),
-            len(training_dataloader)*n_epochs//(len(device)*accumulate_grad_batches[0]*2),
-            len(training_dataloader)*n_epochs//(len(device)*accumulate_grad_batches[0]),                
-        ],
-        "factors": [1e-03, 1, 1, 1e-03],
-        "verbose": False,
-    }
+        callbacks = [
+            EarlyStopping(monitor='val_loss', patience=5),
+            ModelCheckpoint(
+                dirpath=archive+'/model_checkpoint_graphnet/',
+                filename=run_name+'-{epoch:02d}-{val_loss:.6f}',
+                monitor= 'val_loss',
+                save_top_k = 30,
+                every_n_epochs = 1,
+                save_weights_only=False,
+            ),
+            ProgressBar(),
+            GradientAccumulationScheduler(scheduling=accumulate_grad_batches),
+            #LearningRateMonitor(logging_interval='step'),
+        ]
+
 
     print("Starting training")
     model = build_model(graph_definition=graph_definition,
@@ -383,51 +427,45 @@ if __name__ == "__main__":
                         )
     
 
-    # Training model
-    callbacks = [
-        EarlyStopping(monitor='val_loss', patience=5),
-        ModelCheckpoint(
-            dirpath=archive+'/model_checkpoint_graphnet/',
-            filename=run_name+'-{epoch:02d}-{val_loss:.6f}',
-            monitor= 'val_loss',
-            save_top_k = 30,
-            every_n_epochs = 1,
-            save_weights_only=False,
-        ),
-        ProgressBar(),
-        GradientAccumulationScheduler(scheduling=accumulate_grad_batches),
-        #LearningRateMonitor(logging_interval='step'),
-    ]
+
 
     distribution_strategy = 'ddp'
 
-    model.fit(
-        training_dataloader,
-        validation_dataloader,
-        callbacks=callbacks,
-        max_epochs=n_epochs,
-        gpus=device,
-        distribution_strategy=distribution_strategy,
-        check_val_every_n_epoch=1,
-        precision=32,
-        #logger=WandbLogger(project='train_dynedgeTITO_northern', name=run_name),
-    )
+
         
-    model.save(os.path.join(archive, f"{run_name}.pth"))
-    model.save_state_dict(os.path.join(archive, f"{run_name}_state_dict.pth"))
-    #print(f"Model saved to {archive}/{run_name}.pth")
+    if not INFERENCE:
+        model.fit(
+            training_dataloader,
+            validation_dataloader,
+            callbacks=callbacks,
+            max_epochs=n_epochs,
+            gpus=device,
+            distribution_strategy=distribution_strategy,
+            check_val_every_n_epoch=1,
+            precision=32,
+            #logger=WandbLogger(project='train_dynedgeTITO_northern', name=run_name),
+        )
+        model.save(os.path.join(archive, f"{run_name}.pth"))
+        model.save_state_dict(os.path.join(archive, f"{run_name}_state_dict.pth"))
+        print(f"Model saved to {archive}/{run_name}.pth")
+    else:
+        checkpoint_path = (f'/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23/'
+                        f'model2_dynedgeTITO__directionReco_50e_trainMaxPulses300_valMaxPulses300_layerSize3_useGGFalse_usePPFalse_batch256_nround50_numDatabaseFiles4_state_dict.pth')
+        factor = 1/4
+        results0 = inference(device=device, test_min_pulses=0, test_max_pulses=500, batch_size=int(3000*factor), checkpoint_path=checkpoint_path, graph_definition=graph_definition)
+        gc.collect()
+        results1 = inference(device=device, test_min_pulses=500, test_max_pulses=1000, batch_size=int(350*factor), checkpoint_path=checkpoint_path, graph_definition=graph_definition)
+        gc.collect()
+        results2 = inference(device=device, test_min_pulses=1000, test_max_pulses=1500, batch_size=int(100*factor), checkpoint_path=checkpoint_path, graph_definition=graph_definition)
+        gc.collect()
+        results3 = inference(device=device, test_min_pulses=1500, test_max_pulses=2000, batch_size=int(50*factor), checkpoint_path=checkpoint_path, graph_definition=graph_definition)
+        gc.collect()
+        results4 = inference(device=device, test_min_pulses=2000, test_max_pulses=3000, batch_size=int(20*factor), checkpoint_path=checkpoint_path, graph_definition=graph_definition)
+        gc.collect()
+            
+        results = pd.concat([results0, results1, results2, results3, results4]).sort_values('event_no')
         
-        
-        
-        
-    ##results0 = inference(device=device, test_min_pulses=0, test_max_pulses=500, batch_size=1000)
-    ##results1 = inference(device=device, test_min_pulses=500, test_max_pulses=1000, batch_size=350)
-    ##results2 = inference(device=device, test_min_pulses=1000, test_max_pulses=1500, batch_size=150)
-    ##results3 = inference(device=device, test_min_pulses=1500, test_max_pulses=2000, batch_size=50)
-    ##results4 = inference(device=device, test_min_pulses=2000, test_max_pulses=3000, batch_size=20)
-    ##    
-    ##results = pd.concat([results0, results1, results2, results3, results4]).sort_values('event_no')
-    ##
-    ##run_name = 'model1_batch1-55'       
-    ##results.to_csv(f"/remote/ceph/user/l/llorente/prediction_models/graphnet_predictions/{run_name}_graphnet.csv")
-    ##print(f'predicted and saved in /remote/ceph/user/l/llorente/prediction_models/graphnet_predictions/{run_name}_graphnet.csv')
+        run_name = 'model3_northern_tracks'
+        path_to_save = '/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23/prediction_models'
+        results.to_csv(f"{path_to_save}/{run_name}_graphnet.csv")
+        print(f'predicted and saved in {results}')

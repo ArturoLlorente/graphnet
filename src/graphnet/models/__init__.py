@@ -10,3 +10,4 @@ GNN
 
 from .model import Model
 from .standard_model import StandardModel
+from .standard_model_prediction import StandardModelPred

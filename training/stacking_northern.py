@@ -1,471 +1,416 @@
-import os
+import torch
 import numpy as np
 import pandas as pd
-from tqdm.auto import tqdm
-import gc
+import random
 
 import torch
+from torch import Tensor
+from torch.nn import ModuleList
 from torch.optim.adam import Adam
+from torch.utils.data import Dataset, DataLoader
+
+
+from torch_geometric.data import Data
 
 from pytorch_lightning.callbacks import ModelCheckpoint, GradientAccumulationScheduler, LearningRateMonitor
 from pytorch_lightning.loggers import WandbLogger 
-from pytorch_lightning.callbacks import EarlyStopping
 
-from graphnet.data.dataset import EnsembleDataset
-from graphnet.data.dataset import SQLiteDataset
-from graphnet.data.constants import FEATURES, TRUTH
+from graphnet.utilities.config import save_model_config
 
-from graphnet.models import StandardModel, StandardModelPred
-from graphnet.models.detector.icecube import IceCube86
-from graphnet.models.graphs import KNNGraph
-from graphnet.models.gnn import DynEdgeTITO
-from graphnet.models.graphs.nodes import NodesAsPulses
 from graphnet.models.task.reconstruction import DirectionReconstructionWithKappa
+from graphnet.models import Model
+from graphnet.models.task import Task
 
-from graphnet.training.labels import Direction
+
 from graphnet.training.loss_functions import VonMisesFisher3DLoss
 from graphnet.training.callbacks import ProgressBar, PiecewiseLinearLR
-from graphnet.training.utils import make_dataloader
-from graphnet.training.utils import collate_fn, collator_sequence_buckleting
-from graphnet.utilities.logging import Logger
 
-from typing import Dict, List, Optional, Union, Callable, Tuple
-from torch.utils.data import DataLoader
+from typing import Optional, Union, List, Dict, Any
 
-use_global_features_all = {'model1': True, 'model2': True, 'model3': False, 'model4': True, 'model5': True, 'model6': True}
-use_post_processing_layers_all = {'model1': True, 'model2': True, 'model3': False, 'model4': True, 'model5': True, 'model6': True}
-dyntrans_layer_sizes_all = {'model1': [(256, 256), (256, 256), (256, 256), (256, 256)],
-                        'model2': [(256, 256), (256, 256), (256, 256), (256, 256)],
-                        'model3': [(256, 256), (256, 256), (256, 256)],
-                        'model4': [(256, 256), (256, 256), (256, 256)],
-                        'model5': [(256, 256), (256, 256), (256, 256), (256, 256)],
-                        'model6': [(256, 256), (256, 256), (256, 256), (256, 256)]}
-columns_nearest_neighbours_all = {'model1': [0, 1, 2], 'model2': [0, 1, 2], 'model3': [0, 1, 2], 'model4': [0, 1, 2, 3], 'model5': [0, 1, 2], 'model6': [0, 1, 2, 3]}
+def convert_horizontal_to_direction(azimuth, zenith):
+    dir_z = np.cos(zenith)
+    dir_x = np.sin(zenith) * np.cos(azimuth)
+    dir_y = np.sin(zenith) * np.sin(azimuth)
+    return dir_x, dir_y, dir_z
     
-def make_dataloaders(
-    db: Union[List[str], str],
-    graph_definition: Optional[KNNGraph],
-    pulsemaps: Union[str, List[str]],
-    features: List[str],
-    truth: List[str],
-    *,
-    batch_size: int = 256,
-    train_selection: Optional[List[int]],
-    val_selection: Optional[List[int]],
-    num_workers: int = 30,
-    persistent_workers: bool = True,
-    node_truth: List[str] = None,
-    truth_table: str = 'truth',
-    node_truth_table: Optional[str] = None,
-    string_selection: List[int] = None,
-    loss_weight_table: Optional[str] = None,
-    loss_weight_column: Optional[str] = None,
-    index_column: str = 'event_no',
-    labels: Optional[Dict[str, Callable]] = None,
-    collate_fn: Optional[Callable] = collate_fn,
-) -> DataLoader:
+
+class DatasetStacking(Dataset):
+    def __init__(self,
+                 target_columns: Union[List[str], str] = ["direction_x", "direction_y", "direction_z", "direction_kappa"],
+                 model_preds: Union[pd.DataFrame, List[pd.DataFrame]] = None,
+                 use_mid_features: bool = True,
+                 ):
+        
     
-    """Construct `DataLoader` instance."""
-    # Check(s)
-    if isinstance(pulsemaps, str):
-        pulsemaps = [pulsemaps]
-    if isinstance(db, list):
-        assert len(train_selection) == len(db)
-        train_datasets = []
-        pbar = tqdm(total=len(db))
-        for db_idx, database in enumerate(db):
-
-            train_datasets.append(SQLiteDataset(
-                path=database,
-                graph_definition=graph_definition,
-                pulsemaps=pulsemaps,
-                features=features,
-                truth=truth,
-                selection=train_selection[db_idx],
-                node_truth=node_truth,
-                truth_table=truth_table,
-                node_truth_table=node_truth_table,
-                string_selection=string_selection,
-                loss_weight_table=loss_weight_table,
-                loss_weight_column=loss_weight_column,
-                index_column=index_column,
-            ))
-            pbar.update(1)
-
-        if isinstance(labels, dict):
-            for label in labels.keys():
-                for train_dataset in train_datasets:
-                    train_dataset.add_label(key=label, fn=labels[label])
-                    
-        train_dataset = EnsembleDataset(train_datasets)
-
-        training_dataloader = DataLoader(
-            dataset=train_dataset,
-            batch_size=batch_size,
-            shuffle=True,
-            num_workers=num_workers,
-            collate_fn=collate_fn,
-            persistent_workers=persistent_workers,
-            prefetch_factor=2
-        )
-
-        val_dataset = SQLiteDataset(
-                        path = db[-1],
-                        graph_definition=graph_definition,
-                        pulsemaps=pulsemaps,
-                        features=features,
-                        truth=truth,
-                        selection=val_selection,
-                        node_truth=node_truth,
-                        truth_table=truth_table,
-                        node_truth_table=node_truth_table,
-                        string_selection=string_selection,
-                        loss_weight_table=loss_weight_table,
-                        loss_weight_column=loss_weight_column,
-                        index_column=index_column,
-        )
+                
+        if isinstance(model_preds, pd.DataFrame):
+            self.model_preds = [model_preds]
+        elif isinstance(model_preds, List):
+            self.model_preds = model_preds
+        else:
+            assert False, "prediction file must be a DataFrame or a list of DataFrames"
+                
+        self.target_columns = target_columns
+        self.use_mid_features = use_mid_features
         
-        if isinstance(labels, dict):
-            for label in labels.keys():
-                val_dataset.add_label(key=label, fn=labels[label])
+            
+        x = []
+        y = []
+        event_ids = []
+        idx1 = []
+        idx2 = []   
+        for idx, model_pred in enumerate(self.model_preds):
+            columns = self.target_columns
+            if "direction_kappa" in model_pred.columns:
+                model_pred["direction_kappa"]=np.log1p(model_pred["direction_kappa"])
+            if "direction_kappa1" in model_pred.columns:
+                model_pred["direction_kappa1"]=np.log1p(model_pred["direction_kappa1"])
+                #columns = columns + ["direction_x1", "direction_y1", "direction_z1", "direction_kappa1"]
+            if self.use_mid_features:
+                columns = columns + ["idx"+str(i) for i in range(128)]
+            x.append(model_pred[columns].reset_index(drop=True))
+            y.append(np.stack(convert_horizontal_to_direction(model_pred["azimuth"], model_pred["zenith"])).T)
+            event_ids.append(model_pred["event_id"].values)
+            #idx1.append(np.full(len(model_pred),idx))
+            #idx2.append(np.arange(len(model_pred)))
+            
+        self.X = pd.concat(x, axis=1).values
+       
+        #self.X = pd.concat(x, axis=1)
+        self.Y = np.concatenate(y, axis=0)
+        self.event_ids = np.concatenate(event_ids, axis=0)
         
-        validation_dataloader = DataLoader(
-            dataset=val_dataset,
-            batch_size=batch_size,
-            shuffle=False,
-            num_workers=num_workers,
-            collate_fn=collate_fn,
-            persistent_workers=persistent_workers,
-            prefetch_factor=2,
+            
+    def __len__(self):
+        return self.X.shape[0]
+    
+    def n_columns(self):
+        return self.X.shape[1]
+    
+    def __getitem__(self, index):
+        #idx1 = self.idx1[index]
+        #idx2 = self.idx2[index]
+        x = self.X[index]
+        y = self.Y[index]
+        event_id = self.event_ids[index]
+        return x, y, event_id
+        
+
+class StandardModelStacking(Model):
+    """Main class for standard models in graphnet.
+
+    This class chains together the different elements of a complete GNN-based
+    model (detector read-in, GNN architecture, and task-specific read-outs).
+    """
+
+    @save_model_config
+    def __init__(
+        self,
+        *,
+        tasks: Union[Task, List[Task]],
+        n_input_features: int = 3, 
+        hidden_size: Optional[int] = 512,
+        dataset: DatasetStacking,
+        optimizer_class: type = Adam,
+        optimizer_kwargs: Optional[Dict] = None,
+        scheduler_class: Optional[type] = None,
+        scheduler_kwargs: Optional[Dict] = None,
+        scheduler_config: Optional[Dict] = None,
+    ) -> None:
+        """Construct `StandardModel`."""
+        # Base class constructor
+        super().__init__()
+
+        # Check(s)
+        if isinstance(tasks, Task):
+            tasks = [tasks]
+        assert isinstance(tasks, (list, tuple))
+        assert all(isinstance(task, Task) for task in tasks)
+
+        # Member variable(s)
+        self._tasks = ModuleList(tasks)
+        self._optimizer_class = optimizer_class
+        self._optimizer_kwargs = optimizer_kwargs or dict()
+        self._scheduler_class = scheduler_class
+        self._scheduler_kwargs = scheduler_kwargs or dict()
+        self._scheduler_config = scheduler_config or dict()
+        self.n_input_features = n_input_features
+        self._dataset = dataset
+        
+        mlp_layers = []
+        layer_sizes = [n_input_features, hidden_size, hidden_size, hidden_size] # todo1
+        for nb_in, nb_out in zip(layer_sizes[:-1], layer_sizes[1:]):
+            mlp_layers.append(torch.nn.Linear(nb_in, nb_out))
+            mlp_layers.append(torch.nn.LeakyReLU())
+            mlp_layers.append(torch.nn.Dropout(0.0))
+
+        self._mlp = torch.nn.Sequential(*mlp_layers)
+
+            
+    def configure_optimizers(self) -> Dict[str, Any]:
+        """Configure the model's optimizer(s)."""
+        optimizer = self._optimizer_class(
+            self.parameters(), **self._optimizer_kwargs
         )
+        config = {
+            "optimizer": optimizer,
+        }
+        if self._scheduler_class is not None:
+            scheduler = self._scheduler_class(
+                optimizer, **self._scheduler_kwargs
+            )
+            config.update(
+                {
+                    "lr_scheduler": {
+                        "scheduler": scheduler,
+                        **self._scheduler_config,
+                    },
+                }
+            )
+        return config
+
+    def forward(self, x):
+        x = x.float()
+        x = self._mlp(x)
+        x = [task(x) for task in self._tasks]
+        return x
+
+    def training_step(self, xye, idx) -> Tensor:
+        """Perform training step."""
+        x,y,event_ids = xye
+        preds = self(x)
+        batch = Data(x=x, direction=y)
+        vlosses = self._tasks[1].compute_loss(preds[1], batch)
+        vloss = torch.sum(vlosses)
         
-                    
-    return training_dataloader, validation_dataloader, train_dataset, val_dataset
+        tlosses = self._tasks[0].compute_loss(preds[0], batch)
+        tloss = torch.sum(tlosses)
+        
+        if self.current_epoch == 0:
+            vloss_weight = 1
+        else:
+            current_lr = self.trainer.optimizers[0].param_groups[0]['lr']
+            vloss_weight = current_lr / 1e-03
 
+        loss = vloss*vloss_weight + tloss
 
-def build_model(
+        return {"loss": loss, 'vloss': vloss, 'tloss': tloss, 'vloss_weight': vloss_weight}
+
+    def validation_step(self, xye, idx) -> Tensor:
+        """Perform validation step."""
+        x,y,event_ids = xye
+        preds = self(x)
+        batch = Data(x=x, direction=y)
+        vlosses = self._tasks[1].compute_loss(preds[1], batch)
+        vloss = torch.sum(vlosses)
+        
+        tlosses = self._tasks[0].compute_loss(preds[0], batch)
+        tloss = torch.sum(tlosses)
+        
+        current_lr = self.trainer.optimizers[0].param_groups[0]['lr']
+        vloss_weight = current_lr / 1e-03
+
+        loss = vloss*vloss_weight + tloss
+        return {"loss": loss, 'vloss': vloss, 'tloss': tloss, 'vloss_weight': vloss_weight}
+
+    def inference(self) -> None:
+        """Activate inference mode."""
+        for task in self._tasks:
+            task.inference()
+
+    def train(self, mode: bool = True) -> "Model":
+        """Deactivate inference mode."""
+        super().train(mode)
+        if mode:
+            for task in self._tasks:
+                task.train_eval()
+        return self
+
+    def predict(
+        self,
+        dataloader: DataLoader,
+        gpus: Optional[Union[List[int], int]] = None,
+        distribution_strategy: Optional[str] = None,
+    ) -> List[Tensor]:
+        """Return predictions for `dataloader`."""
+        self.inference()
+        return super().predict(
+            dataloader=dataloader,
+            gpus=gpus,
+            distribution_strategy=distribution_strategy,
+        )
+    
+    
+    
+    
+def build_model_stacking(
     *,
-    graph_definition: Optional[KNNGraph],
-    dyntrans_layer_sizes: Optional[List[Tuple[int, ...]]] = [(256, 256), (256, 256), (256, 256)],
-    global_pooling_schemes: Optional[List[str]] = ["max"],
-    use_global_features: bool = True,
-    use_post_processing_layers: bool = True,
+    dataset: Dataset = None,
+    hidden_size: Optional[int] = 512,
     scheduler_class: Optional[type] = None,
     scheduler_kwargs: Optional[dict] = None,
     ):
 
-    gnn = DynEdgeTITO(
-            nb_inputs=graph_definition.nb_outputs,
-            dyntrans_layer_sizes=dyntrans_layer_sizes,
-            global_pooling_schemes=global_pooling_schemes,
-            use_global_features=use_global_features,
-            use_post_processing_layers=use_post_processing_layers,
-            )
     
-    task = DirectionReconstructionWithKappa(
-            hidden_size=gnn.nb_outputs,
-            target_labels="direction",
-            loss_function=VonMisesFisher3DLoss(),
-        )
+    task = DirectionReconstructionWithKappaTITO(
+        hidden_size=hidden_size,
+        target_labels="direction",
+        loss_function=VonMisesFisher3DLoss(),
+    )
         
+    task2 = DirectionReconstructionWithKappaTITO(
+                        hidden_size=hidden_size,
+                        target_labels="direction",
+                        loss_function=VonMisesFisher3DLossTITO(),
+    )
     prediction_columns =['dir_x_pred', 'dir_y_pred', 'dir_z_pred', 'dir_kappa_pred']
-    additional_attributes=['zenith', 'azimuth', 'event_no', 'energy']
+    additional_attributes=['zenith', 'azimuth', 'event_id']
 
     scheduler_config={
-            "interval": "step",
-        }
+        "interval": "step",
+    }
 
-    if INFERENCE:
-        model = StandardModelPred(
-                graph_definition=graph_definition,
-                gnn=gnn,
-                tasks=[task],
-                optimizer_class=Adam,
-                optimizer_kwargs={'lr': 1e-03, 'eps': 1e-03},
-                scheduler_class= scheduler_class,
-                scheduler_kwargs=scheduler_kwargs,
-                scheduler_config=scheduler_config,
-            )
-    else:
-        model = StandardModel(
-                graph_definition=graph_definition,
-                gnn=gnn,
-                tasks=[task],
-                optimizer_class=Adam,
-                optimizer_kwargs={'lr': 1e-03, 'eps': 1e-03},
-                scheduler_class= scheduler_class,
-                scheduler_kwargs=scheduler_kwargs,
-                scheduler_config=scheduler_config,
-            )
+
+    model = StandardModelStacking(
+        tasks=[task2, task],
+        n_input_features=dataset.n_columns(),
+        hidden_size=hidden_size,
+        dataset=dataset,
+        optimizer_class=Adam,
+        optimizer_kwargs={'lr': 1e-03, 'eps': 1e-03},
+        scheduler_class= scheduler_class,
+        scheduler_kwargs=scheduler_kwargs,
+        scheduler_config=scheduler_config,
+     )
     model.prediction_columns = prediction_columns
     model.additional_attributes = additional_attributes
     
     return model
 
+seed = 42
+def set_seed(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.use_deterministic_algorithms(True)
 
-def inference(device: int,
-                checkpoint_path: str,
-                test_min_pulses: int,
-                test_max_pulses: int,
-                batch_size: int,
-                use_all_features_in_prediction: bool = True,
-                graph_definition: Optional[KNNGraph] = None,
-            ):
-    test_path = '/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/dev_northern_tracks_muon_labels_v3_part_5.db'
-    test_selection_file = pd.read_csv('/home/iwsatlas1/oersoe/phd/northern_tracks/energy_reconstruction/selections/dev_northern_tracks_muon_labels_v3_part_5_regression_selection.csv')
-    test_selection = test_selection_file.loc[(test_selection_file['n_pulses']<test_max_pulses) & (test_selection_file['n_pulses']>test_min_pulses),:]['event_no'].ravel().tolist()
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
-    test_dataloader =  make_dataloader(db = test_path,
-                                        selection = test_selection,
-                                        graph_definition = graph_definition,
-                                        pulsemaps = 'InIceDSTPulses',
-                                        num_workers = 10,
-                                        features = FEATURES.ICECUBE86,
-                                        shuffle = False,
-                                        truth = TRUTH.ICECUBE86,
-                                        batch_size = batch_size,
-                                        truth_table = 'truth',
-                                        index_column='event_no',
-                                        labels = {'direction': Direction()},  
-                                        )
-    
+set_seed(seed=seed)
 
-    model = build_model(graph_definition=graph_definition,
-                        dyntrans_layer_sizes=dyntrans_layer_sizes,
-                        global_pooling_schemes=global_pooling_schemes,
-                        use_global_features=use_global_features,
-                        use_post_processing_layers=use_post_processing_layers,
-                        scheduler_class=scheduler_class,
-                        scheduler_kwargs=scheduler_kwargs,
-                        )
-    model.eval()
-    model.inference()
-    checkpoint = torch.load(checkpoint_path, torch.device('cpu'))
-    
-    if 'state_dict' in checkpoint:
-        checkpoint = checkpoint['state_dict']
-    model.load_state_dict(checkpoint)
+prediction_df = []
+for file_idx in range(6):
+    prediction_df.append(pd.read_csv(f"/remote/ceph/user/l/llorente/prediction_models/graphnet_predictions/model{file_idx+1}_batch1-55_graphnet.csv"))
+
+train_dataset = DatasetStacking(target_columns=['direction_x', 'direction_y', 'direction_z', 'direction_kappa', 'direction_x1', 'direction_y1', 'direction_z1', 'direction_kappa1'],
+                                   model_preds=prediction_df)
+val_dataset = DatasetStacking(target_columns=['direction_x', 'direction_y', 'direction_z', 'direction_kappa', 'direction_x1', 'direction_y1', 'direction_z1', 'direction_kappa1'],
+                                     model_preds=prediction_df)
+train_dataloader = DataLoader(train_dataset, batch_size=1000, shuffle=True, num_workers=64)
+val_dataloader = DataLoader(val_dataset, batch_size=1000, shuffle=False, num_workers=64)
 
 
-    event_nos = []
-    zenith = []
-    azimuth = []
-    preds = []
-    print('start predict')
-    validateMode=True
-    with torch.no_grad():
-        model.to(f'cuda:{device[0]}')
-        for batch in tqdm(test_dataloader):
-            pred = model(batch.to(f'cuda:{device[0]}'))
-            
-            if use_all_features_in_prediction:
-                preds.append(torch.cat(pred, axis=-1))
-            else:
-                preds.append(pred[0])
-            event_nos.append(batch.event_no)
-            if validateMode:
-                zenith.append(batch.zenith)
-                azimuth.append(batch.azimuth)
-    preds = torch.cat(preds).to('cpu').detach().numpy()
 
+## Start training
+dataloader = "dummy"
+device = [3]
+#train_dataset = "dummy"
+hidden_size = 512
+accumulate_grad_batches = {0: 2}
 
-    if use_all_features_in_prediction:
-        if preds.shape[1] == 128+8:
-            columns = ['direction_x','direction_y','direction_z','direction_kappa1','direction_x1','direction_y1','direction_z1','direction_kappa'] + [f'idx{i}' for i in range(128)]
-        else:
-            columns = ['direction_x','direction_y','direction_z','direction_kappa'] + [f'idx{i}' for i in range(128)]
-    else:
-        columns = ['direction_x','direction_y','direction_z','direction_kappa']
-        
-    results = pd.DataFrame(preds, columns=columns)
-    results['event_no'] = torch.cat(event_nos).to('cpu').detach().numpy()
-    if validateMode:
-        results['zenith'] = torch.cat(zenith).to('cpu').numpy()
-        results['azimuth'] = torch.cat(azimuth).to('cpu').numpy()
+scheduler_kwargs={
+    "milestones": [
+        0,
+        len(dataloader)//(len(device)*accumulate_grad_batches[0]*100),
+        len(dataloader)//(len(device)*accumulate_grad_batches[0]*2),
+        len(dataloader)//(len(device)*accumulate_grad_batches[0]),                
+    ],
+    "factors": [1e-03, 1, 1, 1e-04],
+    "verbose": False,
+}
 
-    return results
-# Main function call
-if __name__ == "__main__":
-    
-    target = ['direction']
-    archive = "/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23"
-    weight_column_name = None 
-    weight_table_name =  None
-    batch_size = 256
-    n_epochs = 50
-    device = [2]
-    num_workers = 16
-    pulsemap = 'InIceDSTPulses'
-    node_truth_table = None
-    node_truth = None
-    truth_table = 'truth'
-    index_column = 'event_no'
-    labels = {'direction': Direction()}
-    global_pooling_schemes = ["max"]
-    accumulate_grad_batches = {0: 2}
-    num_database_files = 4
-    train_max_pulses = 300
-    val_max_pulses = 300
-    scheduler_class = PiecewiseLinearLR
-    wandb = False
-    INFERENCE = False
-    ## Diferent models
-
-
-    MODEL = 'model3'
-    use_global_features = use_global_features_all[MODEL]
-    use_post_processing_layers = use_post_processing_layers_all[MODEL]
-    dyntrans_layer_sizes = dyntrans_layer_sizes_all[MODEL]
-    columns_nearest_neighbours = columns_nearest_neighbours_all[MODEL]
-
-
-    run_name = (f"{MODEL}_dynedgeTITO__directionReco_{n_epochs}e_trainMaxPulses{train_max_pulses}_valMaxPulses{val_max_pulses}"
-                f"_layerSize{len(dyntrans_layer_sizes)}_useGG{use_global_features}_usePP{use_post_processing_layers}_batch{batch_size}"
-                f"_nround{n_epochs}_numDatabaseFiles{num_database_files}")
-
-    # Configurations
-    torch.multiprocessing.set_sharing_strategy('file_system')
-    torch.multiprocessing.set_start_method('spawn', force=True)
-
-    # Constants
-    features = FEATURES.ICECUBE86
-    truth = TRUTH.ICECUBE86
-    
-    all_databases = ['/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/dev_northern_tracks_muon_labels_v3_part_1.db',
-                    '/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/dev_northern_tracks_muon_labels_v3_part_2.db',
-                    '/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/dev_northern_tracks_muon_labels_v3_part_3.db',
-                    '/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/dev_northern_tracks_muon_labels_v3_part_4.db']
-    # get selections:
-    all_selections = [pd.read_csv('/home/iwsatlas1/oersoe/phd/northern_tracks/energy_reconstruction/selections/dev_northern_tracks_muon_labels_v3_part_1_regression_selection.csv'),
-                    pd.read_csv('/home/iwsatlas1/oersoe/phd/northern_tracks/energy_reconstruction/selections/dev_northern_tracks_muon_labels_v3_part_2_regression_selection.csv'),
-                    pd.read_csv('/home/iwsatlas1/oersoe/phd/northern_tracks/energy_reconstruction/selections/dev_northern_tracks_muon_labels_v3_part_3_regression_selection.csv'),
-                    pd.read_csv('/home/iwsatlas1/oersoe/phd/northern_tracks/energy_reconstruction/selections/dev_northern_tracks_muon_labels_v3_part_4_regression_selection.csv')]
-    
-    all_databases = all_databases[:num_database_files]
-    all_selections = all_selections[:num_database_files]
-    # get_list_of_databases:
-    train_selections = []
-    for selection in all_selections:
-        train_selections.append(selection.loc[selection['n_pulses'] < train_max_pulses,:][index_column].ravel().tolist())
-    train_selections[-1] = train_selections[-1][:int(len(train_selections[-1])*0.9)]
-    val_selection = train_selections[-1][int(len(train_selections[-1])*0.9):]
-
-    print("Loading databases")
-
-    graph_definition = KNNGraph(
-        detector=IceCube86(),
-        node_definition=NodesAsPulses(),
-        nb_nearest_neighbours=6,
-        node_feature_names=features,
-        columns=columns_nearest_neighbours,
+model  = build_model_stacking(
+    dataset=train_dataset,
+    hidden_size=512,
+    scheduler_class=PiecewiseLinearLR,
+    scheduler_kwargs=scheduler_kwargs,
     )
 
+runName = 'graphnet_stacking'
+callbacks = [
+    ModelCheckpoint(
+        dirpath='/remote/ceph/user/l/llorente/training_1e_test/',
+        filename=runName+'-{epoch:02d}-{trn_tloss:.6f}',
+        save_weights_only=False,
+    ),
+    ProgressBar(),
+]
 
+model.fit(train_dataloader=train_dataloader,
+          val_dataloader=val_dataloader,
+          callbacks=callbacks,
+          max_epochs=4,
+          gpus=device,)
 
-    
-    if INFERENCE:
-        scheduler_kwargs=None
-    else:
-        (training_dataloader, 
-        validation_dataloader,
-        train_dataset, 
-        val_dataset) = make_dataloaders(db=all_databases,
-                                            graph_definition=graph_definition,
-                                            pulsemaps=pulsemap,
-                                            features=features,
-                                            truth=truth,
-                                            batch_size=batch_size,
-                                            train_selection=train_selections,
-                                            val_selection=val_selection,
-                                            num_workers=num_workers,
-                                            persistent_workers=True,
-                                            node_truth=node_truth,
-                                            truth_table=truth_table,
-                                            node_truth_table=node_truth_table,
-                                            string_selection=None,
-                                            loss_weight_table=None,
-                                            loss_weight_column=None,
-                                            index_column=index_column,
-                                            labels=labels,
-                                            collate_fn=collator_sequence_buckleting(),
-                                            )
-        scheduler_kwargs={
-            "milestones": [
-                0,
-                len(training_dataloader)//(len(device)*accumulate_grad_batches[0]*30),
-                len(training_dataloader)*n_epochs//(len(device)*accumulate_grad_batches[0]*2),
-                len(training_dataloader)*n_epochs//(len(device)*accumulate_grad_batches[0]),                
-            ],
-            "factors": [1e-03, 1, 1, 1e-03],
-            "verbose": False,
-        }
+from tqdm.auto import tqdm
+CKPT = f'/remote/ceph/user/l/llorente/tito_solution/model_graphnet/stacking-6models-last.pth'
+state_dict =  torch.load(CKPT, torch.device('cpu'))
 
-        callbacks = [
-            EarlyStopping(monitor='val_loss', patience=5),
-            ModelCheckpoint(
-                dirpath=archive+'/model_checkpoint_graphnet/',
-                filename=run_name+'-{epoch:02d}-{val_loss:.6f}',
-                monitor= 'val_loss',
-                save_top_k = 30,
-                every_n_epochs = 1,
-                save_weights_only=False,
-            ),
-            ProgressBar(),
-            GradientAccumulationScheduler(scheduling=accumulate_grad_batches),
-            #LearningRateMonitor(logging_interval='step'),
-        ]
+if 'state_dict' in state_dict.keys():
+    state_dict = state_dict['state_dict']
+model.load_state_dict(state_dict)
+USE_ALL_FEA_IN_PRED=True
+validateMode=True
 
+event_ids = []
+zenith = []
+azimuth = []
+preds = []
+print('start predict')
 
-    print("Starting training")
-    model = build_model(graph_definition=graph_definition,
-                        dyntrans_layer_sizes=dyntrans_layer_sizes,
-                        global_pooling_schemes=global_pooling_schemes,
-                        use_global_features=use_global_features,
-                        use_post_processing_layers=use_post_processing_layers,
-                        scheduler_class=scheduler_class,
-                        scheduler_kwargs=scheduler_kwargs,
-                        )
-    
-
-
-
-    distribution_strategy = 'ddp'
-
-
+real_x = []
+real_y = []
+real_z = []
+with torch.no_grad():
+    model.eval()
+    model.to(f'cuda:{device[0]}')
+    for batch in tqdm(val_dataloader):
         
-    if not INFERENCE:
-        model.fit(
-            training_dataloader,
-            validation_dataloader,
-            callbacks=callbacks,
-            max_epochs=n_epochs,
-            gpus=device,
-            distribution_strategy=distribution_strategy,
-            check_val_every_n_epoch=1,
-            precision=32,
-            #logger=WandbLogger(project='train_dynedgeTITO_northern', name=run_name),
-        )
-        model.save(os.path.join(archive, f"{run_name}.pth"))
-        model.save_state_dict(os.path.join(archive, f"{run_name}_state_dict.pth"))
-        print(f"Model saved to {archive}/{run_name}.pth")
+        pred = model(batch[0].to(f'cuda:{device[0]}'))
+        #preds.append(pred[0])
+        if USE_ALL_FEA_IN_PRED:
+            preds.append(torch.cat(pred, axis=-1))
+        else:
+            preds.append(pred[0])
+        event_ids.append(batch[2])
+        if validateMode:
+            real_x.append(batch[1][:,0])
+            real_y.append(batch[1][:,1])
+            real_z.append(batch[1][:,2])
+preds = torch.cat(preds).to('cpu').detach().numpy()
+#zenith = torch.cat(zenith).to('cpu').numpy()
+#azimuth = torch.cat(azimuth).to('cpu').numpy()
+real_x = torch.cat(real_x).to('cpu').numpy()
+real_y = torch.cat(real_y).to('cpu').numpy()
+real_z = torch.cat(real_z).to('cpu').numpy()
+#results = pd.DataFrame(preds, columns=model.prediction_columns)
+if USE_ALL_FEA_IN_PRED:
+    if preds.shape[1] == 128+8:
+        columns = ['direction_x','direction_y','direction_z','direction_kappa1','direction_x1','direction_y1','direction_z1','direction_kappa'] + [f'idx{i}' for i in range(128)]
     else:
-        checkpoint_path = (f'/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23/'
-                        f'model2_dynedgeTITO__directionReco_50e_trainMaxPulses300_valMaxPulses300_layerSize3_useGGFalse_usePPFalse_batch256_nround50_numDatabaseFiles4_state_dict.pth')
-        factor = 1/4
-        results0 = inference(device=device, test_min_pulses=0, test_max_pulses=500, batch_size=int(3000*factor), checkpoint_path=checkpoint_path, graph_definition=graph_definition)
-        gc.collect()
-        results1 = inference(device=device, test_min_pulses=500, test_max_pulses=1000, batch_size=int(350*factor), checkpoint_path=checkpoint_path, graph_definition=graph_definition)
-        gc.collect()
-        results2 = inference(device=device, test_min_pulses=1000, test_max_pulses=1500, batch_size=int(100*factor), checkpoint_path=checkpoint_path, graph_definition=graph_definition)
-        gc.collect()
-        results3 = inference(device=device, test_min_pulses=1500, test_max_pulses=2000, batch_size=int(50*factor), checkpoint_path=checkpoint_path, graph_definition=graph_definition)
-        gc.collect()
-        results4 = inference(device=device, test_min_pulses=2000, test_max_pulses=3000, batch_size=int(20*factor), checkpoint_path=checkpoint_path, graph_definition=graph_definition)
-        gc.collect()
-            
-        results = pd.concat([results0, results1, results2, results3, results4]).sort_values('event_no')
-        
-        run_name = 'model3_northern_tracks'
-        path_to_save = '/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23/prediction_models'
-        results.to_csv(f"{path_to_save}/{run_name}_graphnet.csv")
-        print(f'predicted and saved in {results}')
+        columns = ['direction_x','direction_y','direction_z','direction_kappa'] + [f'idx{i}' for i in range(128)]
+else:
+    columns=model.prediction_columns
+results = pd.DataFrame(preds, columns=columns)
+results['event_id'] = np.concatenate(event_ids)
+if validateMode:
+    #results['zenith'] = zenith#np.concatenate(zenith)
+    #results['azimuth'] = azimuth#np.concatenate(azimuth)
+    results['real_x'] = real_x
+    results['real_y'] = real_y
+    results['real_z'] = real_z
+    
+results.sort_values('event_id')
+results.to_csv(f'/remote/ceph/user/l/llorente/prediction_models/stacking_tito/model_checkpoint_graphnet/predictions.csv')

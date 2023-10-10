@@ -468,4 +468,4 @@ if __name__ == "__main__":
         run_name = 'model3_northern_tracks'
         path_to_save = '/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23/prediction_models'
         results.to_csv(f"{path_to_save}/{run_name}_graphnet.csv")
-        print(f'predicted and saved in {results}')
+        print(f'predicted and saved in {path_to_save}/{run_name}_graphnet.csv')

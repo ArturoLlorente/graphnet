@@ -211,6 +211,7 @@ def inference(device: int,
                 use_all_features_in_prediction: bool = True,
                 graph_definition: Optional[KNNGraph] = None,
             ):
+
     test_path = '/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/dev_northern_tracks_muon_labels_v3_part_5.db'
     test_selection_file = pd.read_csv('/home/iwsatlas1/oersoe/phd/northern_tracks/energy_reconstruction/selections/dev_northern_tracks_muon_labels_v3_part_5_regression_selection.csv')
     test_selection = test_selection_file.loc[(test_selection_file['n_pulses']<test_max_pulses) & (test_selection_file['n_pulses']>test_min_pulses),:]['event_no'].ravel().tolist()
@@ -219,7 +220,7 @@ def inference(device: int,
                                         selection = test_selection,
                                         graph_definition = graph_definition,
                                         pulsemaps = 'InIceDSTPulses',
-                                        num_workers = 10,
+                                        num_workers = 16,
                                         features = FEATURES.ICECUBE86,
                                         shuffle = False,
                                         truth = TRUTH.ICECUBE86,
@@ -293,7 +294,7 @@ if __name__ == "__main__":
     weight_table_name =  None
     batch_size = 256
     n_epochs = 50
-    device = [2]
+    device = [1]
     num_workers = 16
     pulsemap = 'InIceDSTPulses'
     node_truth_table = None
@@ -304,15 +305,15 @@ if __name__ == "__main__":
     global_pooling_schemes = ["max"]
     accumulate_grad_batches = {0: 2}
     num_database_files = 4
-    train_max_pulses = 300
-    val_max_pulses = 300
+    train_max_pulses = 600
+    val_max_pulses = 600
     scheduler_class = PiecewiseLinearLR
     wandb = False
     INFERENCE = True
     ## Diferent models
 
 
-    MODEL = 'model3'
+    MODEL = 'model1'
     use_global_features = use_global_features_all[MODEL]
     use_post_processing_layers = use_post_processing_layers_all[MODEL]
     dyntrans_layer_sizes = dyntrans_layer_sizes_all[MODEL]
@@ -401,7 +402,7 @@ if __name__ == "__main__":
         }
 
         callbacks = [
-            EarlyStopping(monitor='val_loss', patience=5),
+            EarlyStopping(monitor='val_loss', patience=10),
             ModelCheckpoint(
                 dirpath=archive+'/model_checkpoint_graphnet/',
                 filename=run_name+'-{epoch:02d}-{val_loss:.6f}',
@@ -425,13 +426,7 @@ if __name__ == "__main__":
                         scheduler_class=scheduler_class,
                         scheduler_kwargs=scheduler_kwargs,
                         )
-    
-
-
-
     distribution_strategy = 'ddp'
-
-
         
     if not INFERENCE:
         model.fit(
@@ -449,9 +444,8 @@ if __name__ == "__main__":
         model.save_state_dict(os.path.join(archive, f"{run_name}_state_dict.pth"))
         print(f"Model saved to {archive}/{run_name}.pth")
     else:
-        checkpoint_path = (f'/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23/'
-                        f'model2_dynedgeTITO__directionReco_50e_trainMaxPulses300_valMaxPulses300_layerSize3_useGGFalse_usePPFalse_batch256_nround50_numDatabaseFiles4_state_dict.pth')
-        factor = 1/4
+        checkpoint_path = (os.path.join(archive, f"{run_name}_state_dict.pth"))
+        factor = 1/6
         results0 = inference(device=device, test_min_pulses=0, test_max_pulses=500, batch_size=int(3000*factor), checkpoint_path=checkpoint_path, graph_definition=graph_definition)
         gc.collect()
         results1 = inference(device=device, test_min_pulses=500, test_max_pulses=1000, batch_size=int(350*factor), checkpoint_path=checkpoint_path, graph_definition=graph_definition)
@@ -465,7 +459,7 @@ if __name__ == "__main__":
             
         results = pd.concat([results0, results1, results2, results3, results4]).sort_values('event_no')
         
-        run_name = 'model3_northern_tracks'
+        run_name_pred = f'{MODEL}_northern_tracks'
         path_to_save = '/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23/prediction_models'
-        results.to_csv(f"{path_to_save}/{run_name}_graphnet.csv")
-        print(f'predicted and saved in {path_to_save}/{run_name}_graphnet.csv')
+        results.to_csv(f"{path_to_save}/{run_name_pred}_graphnet.csv")
+        print(f'predicted and saved in {path_to_save}/{run_name_pred}_graphnet.csv')

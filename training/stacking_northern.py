@@ -56,7 +56,7 @@ class DatasetStacking(Dataset):
             
         x = []
         y = []
-        event_ids = []
+        event_nos = []
         idx1 = []
         idx2 = []   
         for idx, model_pred in enumerate(self.model_preds):
@@ -67,13 +67,13 @@ class DatasetStacking(Dataset):
                 columns = columns + ["idx"+str(i) for i in range(128)]
             x.append(model_pred[columns].reset_index(drop=True))
             y.append(np.stack(convert_horizontal_to_direction(model_pred["azimuth"], model_pred["zenith"])).T)
-            event_ids.append(model_pred["event_id"].values)
+            event_nos.append(model_pred["event_no"].values)
             #idx1.append(np.full(len(model_pred),idx))
             #idx2.append(np.arange(len(model_pred)))
             
         self.X = pd.concat(x, axis=1).values
         self.Y = np.concatenate(y, axis=0)
-        self.event_ids = np.concatenate(event_ids, axis=0)
+        self.event_nos = np.concatenate(event_nos, axis=0)
         
             
     def __len__(self):
@@ -87,8 +87,8 @@ class DatasetStacking(Dataset):
         #idx2 = self.idx2[index]
         x = self.X[index]
         y = self.Y[index]
-        event_id = self.event_ids[index]
-        return x, y, event_id
+        event_no = self.event_nos[index]
+        return x, y, event_no
         
 def build_model_stacking(
     *,
@@ -106,7 +106,7 @@ def build_model_stacking(
     )
         
     prediction_columns =['dir_x_pred', 'dir_y_pred', 'dir_z_pred', 'dir_kappa_pred']
-    additional_attributes=['zenith', 'azimuth', 'event_id']
+    additional_attributes=['zenith', 'azimuth', 'event_no']
 
     scheduler_config={
         "interval": "step",
@@ -138,7 +138,7 @@ def build_model_stacking(
     
     return model
 
-model_ids = [3]
+model_ids = [1,3]
 for model_id in model_ids:
     prediction_df = [pd.read_csv(f'/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23/prediction_models/model{model_id}_northern_tracks_graphnet.csv')]
 
@@ -146,14 +146,14 @@ train_dataset = DatasetStacking(target_columns=['direction_x', 'direction_y', 'd
                                     model_preds=prediction_df)
 val_dataset = DatasetStacking(target_columns=['direction_x', 'direction_y', 'direction_z', 'direction_kappa'],
                                     model_preds=prediction_df)
-train_dataloader = DataLoader(train_dataset, batch_size=1000, shuffle=True, num_workers=16)
-val_dataloader = DataLoader(val_dataset, batch_size=1000, shuffle=False, num_workers=16)
+train_dataloader = DataLoader(train_dataset, batch_size=2000, shuffle=True, num_workers=16)
+val_dataloader = DataLoader(val_dataset, batch_size=2000, shuffle=False, num_workers=16)
 
 
 
 ## Start training
-device = [3]
-hidden_size = 512
+device = [2]
+hidden_size = 132*len(model_ids)
 accumulate_grad_batches = {0: 2}
 
 model  = build_model_stacking(
@@ -179,8 +179,8 @@ model.fit(train_dataloader=train_dataloader,
           max_epochs=4,
           gpus=device,)
 
-model.save('/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23/model_stacking', runName+'-last')
-model.save_state_dict('/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23/model_stacking', runName+'-last')
+model.save('/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23/model_stacking/'+runName+'-last.pth')
+model.save_state_dict('/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23/model_stacking/'+ runName+'-last_state_dict.pth')
 
 #from tqdm.auto import tqdm
 #CKPT = f'/remote/ceph/user/l/llorente/tito_solution/model_graphnet/stacking-6models-last.pth'
@@ -192,7 +192,7 @@ model.save_state_dict('/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_O
 #USE_ALL_FEA_IN_PRED=True
 #validateMode=True
 #
-#event_ids = []
+#event_nos = []
 #zenith = []
 #azimuth = []
 #preds = []
@@ -212,7 +212,7 @@ model.save_state_dict('/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_O
 #            preds.append(torch.cat(pred, axis=-1))
 #        else:
 #            preds.append(pred[0])
-#        event_ids.append(batch[2])
+#        event_nos.append(batch[2])
 #        if validateMode:
 #            real_x.append(batch[1][:,0])
 #            real_y.append(batch[1][:,1])
@@ -232,7 +232,7 @@ model.save_state_dict('/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_O
 #else:
 #    columns=model.prediction_columns
 #results = pd.DataFrame(preds, columns=columns)
-#results['event_id'] = np.concatenate(event_ids)
+#results['event_no'] = np.concatenate(event_nos)
 #if validateMode:
 #    #results['zenith'] = zenith#np.concatenate(zenith)
 #    #results['azimuth'] = azimuth#np.concatenate(azimuth)
@@ -240,5 +240,5 @@ model.save_state_dict('/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_O
 #    results['real_y'] = real_y
 #    results['real_z'] = real_z
 #    
-#results.sort_values('event_id')
+#results.sort_values('event_no')
 #results.to_csv(f'/remote/ceph/user/l/llorente/prediction_models/stacking_tito/model_checkpoint_graphnet/predictions.csv')

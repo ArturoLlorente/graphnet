@@ -101,7 +101,7 @@ class Model(
             max_epochs=max_epochs,
             gpus=gpus,
             callbacks=callbacks,
-            ckpt_path=ckpt_path,
+            #ckpt_path=ckpt_path,
             logger=logger,
             log_every_n_steps=log_every_n_steps,
             gradient_clip_val=gradient_clip_val,

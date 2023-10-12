@@ -62,6 +62,7 @@ class StandardModelStacking(Model):
             mlp_layers.append(torch.nn.Linear(nb_in, nb_out))
             mlp_layers.append(torch.nn.LeakyReLU())
             mlp_layers.append(torch.nn.Dropout(0.0))
+            print("sizes of layers: ", nb_in, nb_out)
 
         self._mlp = torch.nn.Sequential(*mlp_layers)
 
@@ -89,22 +90,40 @@ class StandardModelStacking(Model):
         return config
 
     def forward(self, x):
-        #x = x.float()
+        x = x.float()
         x = self._mlp(x)
         x = [task(x) for task in self._tasks]
         return x
 
     def training_step(self, xye, idx) -> Tensor:
         """Perform training step."""
-        x,y,event_ids = xye
+        x,y,event_nos = xye
         loss, loss_weight = self.shared_step(x, y, idx, istrain=True)
-        return {"loss": loss, 'loss_weight': loss_weight}
+        self.log(
+            "train_loss",
+            loss,
+            batch_size=self._get_batch_size(x),
+            prog_bar=True,
+            on_epoch=True,
+            on_step=False,
+            sync_dist=True,
+        )
+        return loss
 
     def validation_step(self, xye, idx) -> Tensor:
         """Perform validation step."""
-        x,y,event_ids = xye
+        x,y,event_nos = xye
         loss, loss_weight = self.shared_step(x, y, idx, istrain=False)
-        return {"loss": loss, 'loss_weight': loss_weight}
+        self.log(
+            "val_loss",
+            loss,
+            batch_size=self._get_batch_size(x),
+            prog_bar=True,
+            on_epoch=True,
+            on_step=False,
+            sync_dist=True,
+        )
+        return loss
 
     def shared_step(self, x, y, batch_idx, istrain) -> Tensor:
         """Perform shared step.
@@ -118,9 +137,8 @@ class StandardModelStacking(Model):
         losses = self._tasks[0].compute_loss(preds[0], batch)
         loss = torch.sum(losses)
 
-        if istrain:
-            if self.current_epoch == 0:
-                loss_weight = 1
+        if istrain and self.current_epoch == 0:
+            loss_weight = 1
         else:
             current_lr = self.trainer.optimizers[0].param_groups[0]['lr']
             loss_weight = current_lr / 1e-03
@@ -129,7 +147,7 @@ class StandardModelStacking(Model):
         return loss, loss_weight
     
     def _get_batch_size(self, data: List[Data]) -> int:
-        return sum([torch.numel(torch.unique(d.batch)) for d in data])
+        return len(data)
     
     def inference(self) -> None:
         """Activate inference mode."""

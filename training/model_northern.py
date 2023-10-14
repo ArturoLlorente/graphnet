@@ -210,7 +210,13 @@ def inference(device: int,
                 batch_size: int,
                 use_all_features_in_prediction: bool = True,
                 graph_definition: Optional[KNNGraph] = None,
-            ):
+                dyntrans_layer_sizes: Optional[List[Tuple[int, ...]]] = [(256, 256), (256, 256), (256, 256)],
+                global_pooling_schemes: Optional[List[str]] = ["max"],
+                use_global_features: bool = True,
+                use_post_processing_layers: bool = True,
+                scheduler_class: Optional[type] = None,
+                scheduler_kwargs: Optional[dict] = None,
+                ):
 
     test_path = '/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/dev_northern_tracks_muon_labels_v3_part_5.db'
     test_selection_file = pd.read_csv('/home/iwsatlas1/oersoe/phd/northern_tracks/energy_reconstruction/selections/dev_northern_tracks_muon_labels_v3_part_5_regression_selection.csv')
@@ -292,9 +298,9 @@ if __name__ == "__main__":
     archive = "/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23"
     weight_column_name = None 
     weight_table_name =  None
-    batch_size = 128
+    batch_size = 150
     n_epochs = 50
-    device = [2]
+    device = [0]
     num_workers = 16
     pulsemap = 'InIceDSTPulses'
     node_truth_table = None
@@ -309,10 +315,10 @@ if __name__ == "__main__":
     val_max_pulses = 1000
     scheduler_class = PiecewiseLinearLR
     wandb = False
-    INFERENCE = False
+    INFERENCE = True
     ## Diferent models
 
-    resume_training_path = '/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23/model_checkpoint_graphnet/model6_dynedgeTITO__directionReco_50e_trainMaxPulses1000_valMaxPulses1000_layerSize4_useGGTrue_usePPTrue_batch256_nround50_numDatabaseFiles4-epoch=07-val_loss=-2.652161.ckpt'
+    #resume_training_path = '/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23/model_checkpoint_graphnet/model6_dynedgeTITO__directionReco_50e_trainMaxPulses1000_valMaxPulses1000_layerSize4_useGGTrue_usePPTrue_batch256_nround50_numDatabaseFiles4-epoch=07-val_loss=-2.652161.ckpt'
     MODEL = 'model6'
     use_global_features = use_global_features_all[MODEL]
     use_post_processing_layers = use_post_processing_layers_all[MODEL]
@@ -403,7 +409,7 @@ if __name__ == "__main__":
         }
 
         callbacks = [
-            EarlyStopping(monitor='val_loss', patience=10),
+            EarlyStopping(monitor='val_loss', patience=15),
             ModelCheckpoint(
                 dirpath=archive+'/model_checkpoint_graphnet/',
                 filename=run_name+'-{epoch:02d}-{val_loss:.6f}',
@@ -441,40 +447,44 @@ if __name__ == "__main__":
             training_dataloader,
             validation_dataloader,
             callbacks=callbacks,
-            ckpt_path=resume_training_path,
+            #ckpt_path=resume_training_path,
             **fit_params,
         )
         model.save(os.path.join(archive, f"{run_name}.pth"))
         model.save_state_dict(os.path.join(archive, f"{run_name}_state_dict.pth"))
         print(f"Model saved to {archive}/{run_name}.pth")
     else:
-        prediction_result = 10
-
-        import pickle
-        checkpoint_path = (os.path.join(archive, f"{run_name}_state_dict.pth"))
-        factor = 1/4
-        if prediction_result == 1:
-            results0 = inference(device=device, test_min_pulses=0, test_max_pulses=500, batch_size=int(3000*factor), checkpoint_path=checkpoint_path, graph_definition=graph_definition)
-            pickle.dump(results0, open(f"/remote/ceph/user/l/llorente/{MODEL}_results0.pkl", "wb" ) )
-        elif prediction_result == 2:
-            results1 = inference(device=device, test_min_pulses=500, test_max_pulses=1000, batch_size=int(350*factor), checkpoint_path=checkpoint_path, graph_definition=graph_definition)
-            pickle.dump(results1, open(f"/remote/ceph/user/l/llorente/{MODEL}_results1.pkl", "wb" ) )
-        elif prediction_result == 3:
-            results2 = inference(device=device, test_min_pulses=1000, test_max_pulses=1500, batch_size=int(100*factor), checkpoint_path=checkpoint_path, graph_definition=graph_definition)
-            pickle.dump(results2, open(f"/remote/ceph/user/l/llorente/{MODEL}_results2.pkl", "wb" ) )
-        elif prediction_result == 4:
-            results3 = inference(device=device, test_min_pulses=1500, test_max_pulses=2000, batch_size=int(50*factor), checkpoint_path=checkpoint_path, graph_definition=graph_definition)
-            pickle.dump(results3, open(f"/remote/ceph/user/l/llorente/{MODEL}_results3.pkl", "wb" ) )
-        elif prediction_result == 5:
-            results4 = inference(device=device, test_min_pulses=2000, test_max_pulses=3000, batch_size=int(20*factor), checkpoint_path=checkpoint_path, graph_definition=graph_definition)
-            pickle.dump(results4, open(f"/remote/ceph/user/l/llorente/{MODEL}_results4.pkl", "wb" ) )
-        elif prediction_result == 10:
-            all_res = []
-            for i in range(5):
-                all_res.append(pickle.load(open(f"/remote/ceph/user/l/llorente/{MODEL}_results{i}.pkl", "rb" ) ))
-            results = pd.concat(all_res).sort_values('event_no')
         
-            run_name_pred = f'{MODEL}_northern_tracks'
-            path_to_save = '/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23/prediction_models'
-            results.to_csv(f"{path_to_save}/{run_name_pred}_graphnet.csv")
-            print(f'predicted and saved in {path_to_save}/{run_name_pred}_graphnet.csv')
+        all_res = []
+        checkpoint_path = (os.path.join(archive, f"{run_name}_state_dict.pth"))
+        checkpoint_path = '/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23/model_checkpoint_graphnet/model6_dynedgeTITO_directionReco_50e_trainMaxPulses1000_valMaxPulses1000_layerSize4_useGGTrue_usePPTrue_batch128_numDatabaseFiles4-epoch=19-val_loss=-2.670949.ckpt'
+
+        pulse_breakpoints = [0, 500, 1000, 1500, 2000, 3000]
+        batch_sizes_per_pulse = [1750, 150, 25, 15, 5]
+        
+        for min_pulse, max_pulse in zip(pulse_breakpoints[:-1], pulse_breakpoints[1:]):
+            print(f'predicting {min_pulse} to {max_pulse} pulses with batch size {batch_sizes_per_pulse[pulse_breakpoints.index(max_pulse)-1]}')
+            results = inference(device=device, 
+                                test_min_pulses=min_pulse, 
+                                test_max_pulses=max_pulse,
+                                batch_size=batch_sizes_per_pulse[pulse_breakpoints.index(max_pulse)-1], 
+                                checkpoint_path=checkpoint_path, 
+                                use_all_features_in_prediction=True,
+                                graph_definition=graph_definition,
+                                dyntrans_layer_sizes=dyntrans_layer_sizes,
+                                global_pooling_schemes=global_pooling_schemes,
+                                use_global_features=use_global_features,
+                                use_post_processing_layers=use_post_processing_layers,
+                                scheduler_class=scheduler_class,
+                                scheduler_kwargs=scheduler_kwargs)
+            all_res.append(results)
+            del results
+            torch.cuda.empty_cache()
+
+        results = pd.concat(all_res).sort_values('event_no')
+
+
+        run_name_pred = f'{MODEL}_CHECKPOINT_northern_tracks'
+        path_to_save = '/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23/prediction_models'
+        results.to_csv(f"{path_to_save}/{run_name_pred}_graphnet.csv")
+        print(f'predicted and saved in {path_to_save}/{run_name_pred}_graphnet.csv')

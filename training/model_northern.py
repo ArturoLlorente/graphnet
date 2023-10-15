@@ -220,7 +220,7 @@ def inference(device: int,
 
     test_path = '/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/dev_northern_tracks_muon_labels_v3_part_5.db'
     test_selection_file = pd.read_csv('/home/iwsatlas1/oersoe/phd/northern_tracks/energy_reconstruction/selections/dev_northern_tracks_muon_labels_v3_part_5_regression_selection.csv')
-    test_selection = test_selection_file.loc[(test_selection_file['n_pulses']<test_max_pulses) & (test_selection_file['n_pulses']>test_min_pulses),:]['event_no'].ravel().tolist()
+    test_selection = test_selection_file.loc[(test_selection_file['n_pulses']<=test_max_pulses) & (test_selection_file['n_pulses']>test_min_pulses),:]['event_no'].ravel().tolist()
 
     test_dataloader =  make_dataloader(db = test_path,
                                         selection = test_selection,
@@ -298,9 +298,9 @@ if __name__ == "__main__":
     archive = "/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23"
     weight_column_name = None 
     weight_table_name =  None
-    batch_size = 150
+    batch_size = 1000
     n_epochs = 50
-    device = [0]
+    device = [2]
     num_workers = 16
     pulsemap = 'InIceDSTPulses'
     node_truth_table = None
@@ -310,23 +310,23 @@ if __name__ == "__main__":
     labels = {'direction': Direction()}
     global_pooling_schemes = ["max"]
     accumulate_grad_batches = {0: 4}
-    num_database_files = 4
-    train_max_pulses = 1000
-    val_max_pulses = 1000
+    num_database_files = 1
+    train_max_pulses = 350
+    val_max_pulses = 350
     scheduler_class = PiecewiseLinearLR
     wandb = False
-    INFERENCE = True
+    INFERENCE = False
     ## Diferent models
 
     #resume_training_path = '/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23/model_checkpoint_graphnet/model6_dynedgeTITO__directionReco_50e_trainMaxPulses1000_valMaxPulses1000_layerSize4_useGGTrue_usePPTrue_batch256_nround50_numDatabaseFiles4-epoch=07-val_loss=-2.652161.ckpt'
-    MODEL = 'model6'
+    MODEL = 'model4'
     use_global_features = use_global_features_all[MODEL]
     use_post_processing_layers = use_post_processing_layers_all[MODEL]
     dyntrans_layer_sizes = dyntrans_layer_sizes_all[MODEL]
     columns_nearest_neighbours = columns_nearest_neighbours_all[MODEL]
 
 
-    run_name = (f"{MODEL}_dynedgeTITO_directionReco_{n_epochs}e_trainMaxPulses{train_max_pulses}_valMaxPulses{val_max_pulses}"
+    run_name = (f"{MODEL}_NEWTEST_dynedgeTITO_directionReco_{n_epochs}e_trainMaxPulses{train_max_pulses}_valMaxPulses{val_max_pulses}"
                 f"_layerSize{len(dyntrans_layer_sizes)}_useGG{use_global_features}_usePP{use_post_processing_layers}_batch{batch_size}"
                 f"_numDatabaseFiles{num_database_files}")
     #run_name = "dummy"
@@ -339,18 +339,21 @@ if __name__ == "__main__":
     features = FEATURES.ICECUBE86
     truth = TRUTH.ICECUBE86
     
-    all_databases = ['/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/dev_northern_tracks_muon_labels_v3_part_1.db',
-                    '/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/dev_northern_tracks_muon_labels_v3_part_2.db',
-                    '/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/dev_northern_tracks_muon_labels_v3_part_3.db',
-                    '/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/dev_northern_tracks_muon_labels_v3_part_4.db']
-    # get selections:
-    all_selections = [pd.read_csv('/home/iwsatlas1/oersoe/phd/northern_tracks/energy_reconstruction/selections/dev_northern_tracks_muon_labels_v3_part_1_regression_selection.csv'),
-                    pd.read_csv('/home/iwsatlas1/oersoe/phd/northern_tracks/energy_reconstruction/selections/dev_northern_tracks_muon_labels_v3_part_2_regression_selection.csv'),
-                    pd.read_csv('/home/iwsatlas1/oersoe/phd/northern_tracks/energy_reconstruction/selections/dev_northern_tracks_muon_labels_v3_part_3_regression_selection.csv'),
-                    pd.read_csv('/home/iwsatlas1/oersoe/phd/northern_tracks/energy_reconstruction/selections/dev_northern_tracks_muon_labels_v3_part_4_regression_selection.csv')]
-    
-    all_databases = all_databases[:num_database_files]
-    all_selections = all_selections[:num_database_files]
+    #all_databases = ['/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/dev_northern_tracks_muon_labels_v3_part_1.db',
+    #                '/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/dev_northern_tracks_muon_labels_v3_part_2.db',
+    #                '/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/dev_northern_tracks_muon_labels_v3_part_3.db',
+    #                '/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/dev_northern_tracks_muon_labels_v3_part_4.db']
+    ## get selections:
+    #all_selections = [pd.read_csv('/home/iwsatlas1/oersoe/phd/northern_tracks/energy_reconstruction/selections/dev_northern_tracks_muon_labels_v3_part_1_regression_selection.csv'),
+    #                pd.read_csv('/home/iwsatlas1/oersoe/phd/northern_tracks/energy_reconstruction/selections/dev_northern_tracks_muon_labels_v3_part_2_regression_selection.csv'),
+    #                pd.read_csv('/home/iwsatlas1/oersoe/phd/northern_tracks/energy_reconstruction/selections/dev_northern_tracks_muon_labels_v3_part_3_regression_selection.csv'),
+    #                pd.read_csv('/home/iwsatlas1/oersoe/phd/northern_tracks/energy_reconstruction/selections/dev_northern_tracks_muon_labels_v3_part_4_regression_selection.csv')]
+    #
+    #all_databases = all_databases[:num_database_files]
+    #all_selections = all_selections[:num_database_files]
+
+    all_databases = ['/remote/ceph/user/l/llorente/northeren_tracks_ensembled/northern_tracks_part5.db']
+    all_selections = [pd.read_csv('/home/iwsatlas1/oersoe/phd/northern_tracks/energy_reconstruction/selections/dev_northern_tracks_muon_labels_v3_part_5_regression_selection.csv')]
     # get_list_of_databases:
     train_selections = []
     for selection in all_selections:

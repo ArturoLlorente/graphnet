@@ -1,4 +1,3 @@
-import torch
 import numpy as np
 import pandas as pd
 import random
@@ -26,6 +25,7 @@ from graphnet.training.loss_functions import VonMisesFisher3DLoss
 from graphnet.training.callbacks import ProgressBar, PiecewiseLinearLR
 
 from typing import Optional, Union, List, Dict, Any
+
 
 def convert_horizontal_to_direction(azimuth, zenith):
     dir_z = np.cos(zenith)
@@ -57,8 +57,7 @@ class DatasetStacking(Dataset):
         x = []
         y = []
         event_nos = []
-        idx1 = []
-        idx2 = []   
+
         for idx, model_pred in enumerate(self.model_preds):
             columns = self.target_columns
             if "direction_kappa" in model_pred.columns:
@@ -68,8 +67,6 @@ class DatasetStacking(Dataset):
             x.append(model_pred[columns].reset_index(drop=True))
             y.append(np.stack(convert_horizontal_to_direction(model_pred["azimuth"], model_pred["zenith"])).T)
             event_nos.append(model_pred["event_no"].values)
-            #idx1.append(np.full(len(model_pred),idx))
-            #idx2.append(np.arange(len(model_pred)))
             
         self.X = pd.concat(x, axis=1).values
         self.Y = np.concatenate(y, axis=0)
@@ -83,8 +80,6 @@ class DatasetStacking(Dataset):
         return self.X.shape[1]
     
     def __getitem__(self, index):
-        #idx1 = self.idx1[index]
-        #idx2 = self.idx2[index]
         x = self.X[index]
         y = self.Y[index]
         event_no = self.event_nos[index]
@@ -114,9 +109,9 @@ def build_model_stacking(
     scheduler_kwargs={
         "milestones": [
             0,
-            len(train_dataset)//(len(device)*accumulate_grad_batches[0]*100),
-            len(train_dataset)//(len(device)*accumulate_grad_batches[0]*2),
-            len(train_dataset)//(len(device)*accumulate_grad_batches[0]),                
+            len(dataset)//(len(device)*accumulate_grad_batches[0]*100),
+            len(dataset)//(len(device)*accumulate_grad_batches[0]*2),
+            len(dataset)//(len(device)*accumulate_grad_batches[0]),                
         ],
         "factors": [1e-03, 1, 1, 1e-04],
         "verbose": False,
@@ -129,7 +124,7 @@ def build_model_stacking(
         dataset=dataset,
         optimizer_class=Adam,
         optimizer_kwargs={'lr': 1e-03, 'eps': 1e-03},
-        scheduler_class= scheduler_class,
+        scheduler_class=scheduler_class,
         scheduler_kwargs=scheduler_kwargs,
         scheduler_config=scheduler_config,
      )
@@ -138,107 +133,121 @@ def build_model_stacking(
     
     return model
 
-model_ids = [1,3]
-for model_id in model_ids:
-    prediction_df = [pd.read_csv(f'/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23/prediction_models/model{model_id}_northern_tracks_graphnet.csv')]
+if __name__ == "__main__":
 
-train_dataset = DatasetStacking(target_columns=['direction_x', 'direction_y', 'direction_z', 'direction_kappa'],
-                                    model_preds=prediction_df)
-val_dataset = DatasetStacking(target_columns=['direction_x', 'direction_y', 'direction_z', 'direction_kappa'],
-                                    model_preds=prediction_df)
-train_dataloader = DataLoader(train_dataset, batch_size=2000, shuffle=True, num_workers=16)
-val_dataloader = DataLoader(val_dataset, batch_size=2000, shuffle=False, num_workers=16)
+    model_ids = [1,3,4]
+    for model_id in model_ids:
+        prediction_df = [pd.read_csv(f'/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23/prediction_models/model{model_id}_northern_tracks_graphnet.csv')]
+
+    device = [2]
+    hidden_size = 132*len(model_ids)
+    accumulate_grad_batches = {0: 2}
+    max_epochs = 5
+    batch_size = 10000
+    num_workers = 16
+
+    INFERENCE = True
+
+    runName = f'northern_graphnet_models{model_ids}_stacking'
+
+    train_dataset = DatasetStacking(target_columns=['direction_x', 'direction_y', 'direction_z', 'direction_kappa'],
+                                        model_preds=prediction_df,
+                                        )
+    val_dataset = DatasetStacking(target_columns=['direction_x', 'direction_y', 'direction_z', 'direction_kappa'],
+                                        model_preds=prediction_df)
+    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
+    val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
 
 
 
-## Start training
-device = [2]
-hidden_size = 132*len(model_ids)
-accumulate_grad_batches = {0: 2}
+    ## Start training
 
-model  = build_model_stacking(
-    dataset=train_dataset,
-    hidden_size=hidden_size,
-    scheduler_class=PiecewiseLinearLR,
-    accumulate_grad_batches=accumulate_grad_batches,
-    )
 
-runName = 'northern_graphnet_stacking'
-callbacks = [
-    ModelCheckpoint(
-        dirpath='/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23/model_stacking',
-        filename=runName+'-{epoch:02d}-{trn_tloss:.6f}',
-        save_weights_only=False,
-    ),
-    ProgressBar(),
-]
+    model  = build_model_stacking(
+        dataset=train_dataset,
+        hidden_size=hidden_size,
+        scheduler_class=PiecewiseLinearLR,
+        accumulate_grad_batches=accumulate_grad_batches,
+        )
 
-model.fit(train_dataloader=train_dataloader,
-          val_dataloader=val_dataloader,
-          callbacks=callbacks,
-          max_epochs=4,
-          gpus=device,)
+    if not INFERENCE:
+        callbacks = [
+            ModelCheckpoint(
+                dirpath='/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23/model_stacking',
+                filename=runName+'-{epoch:02d}-{trn_tloss:.6f}',
+                save_weights_only=False,
+            ),
+            ProgressBar(),
+        ]
 
-model.save('/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23/model_stacking/'+runName+'-last.pth')
-model.save_state_dict('/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23/model_stacking/'+ runName+'-last_state_dict.pth')
+        model.fit(train_dataloader=train_dataloader,
+                val_dataloader=val_dataloader,
+                callbacks=callbacks,
+                max_epochs=max_epochs,
+                gpus=device,)
 
-#from tqdm.auto import tqdm
-#CKPT = f'/remote/ceph/user/l/llorente/tito_solution/model_graphnet/stacking-6models-last.pth'
-#state_dict =  torch.load(CKPT, torch.device('cpu'))
-#
-#if 'state_dict' in state_dict.keys():
-#    state_dict = state_dict['state_dict']
-#model.load_state_dict(state_dict)
-#USE_ALL_FEA_IN_PRED=True
-#validateMode=True
-#
-#event_nos = []
-#zenith = []
-#azimuth = []
-#preds = []
-#print('start predict')
-#
-#real_x = []
-#real_y = []
-#real_z = []
-#with torch.no_grad():
-#    model.eval()
-#    model.to(f'cuda:{device[0]}')
-#    for batch in tqdm(val_dataloader):
-#        
-#        pred = model(batch[0].to(f'cuda:{device[0]}'))
-#        #preds.append(pred[0])
-#        if USE_ALL_FEA_IN_PRED:
-#            preds.append(torch.cat(pred, axis=-1))
-#        else:
-#            preds.append(pred[0])
-#        event_nos.append(batch[2])
-#        if validateMode:
-#            real_x.append(batch[1][:,0])
-#            real_y.append(batch[1][:,1])
-#            real_z.append(batch[1][:,2])
-#preds = torch.cat(preds).to('cpu').detach().numpy()
-##zenith = torch.cat(zenith).to('cpu').numpy()
-##azimuth = torch.cat(azimuth).to('cpu').numpy()
-#real_x = torch.cat(real_x).to('cpu').numpy()
-#real_y = torch.cat(real_y).to('cpu').numpy()
-#real_z = torch.cat(real_z).to('cpu').numpy()
-##results = pd.DataFrame(preds, columns=model.prediction_columns)
-#if USE_ALL_FEA_IN_PRED:
-#    if preds.shape[1] == 128+8:
-#        columns = ['direction_x','direction_y','direction_z','direction_kappa1','direction_x1','direction_y1','direction_z1','direction_kappa'] + [f'idx{i}' for i in range(128)]
-#    else:
-#        columns = ['direction_x','direction_y','direction_z','direction_kappa'] + [f'idx{i}' for i in range(128)]
-#else:
-#    columns=model.prediction_columns
-#results = pd.DataFrame(preds, columns=columns)
-#results['event_no'] = np.concatenate(event_nos)
-#if validateMode:
-#    #results['zenith'] = zenith#np.concatenate(zenith)
-#    #results['azimuth'] = azimuth#np.concatenate(azimuth)
-#    results['real_x'] = real_x
-#    results['real_y'] = real_y
-#    results['real_z'] = real_z
-#    
-#results.sort_values('event_no')
-#results.to_csv(f'/remote/ceph/user/l/llorente/prediction_models/stacking_tito/model_checkpoint_graphnet/predictions.csv')
+        model.save('/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23/model_stacking/'+runName+'-last.pth')
+        model.save_state_dict('/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23/model_stacking/'+ runName+'-last_state_dict.pth')
+    else:
+
+
+        from tqdm.auto import tqdm
+        CKPT = f'/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23/model_stacking/'+runName+'-last_state_dict.pth'
+        state_dict =  torch.load(CKPT, torch.device('cpu'))
+
+        if 'state_dict' in state_dict.keys():
+            state_dict = state_dict['state_dict']
+        model.load_state_dict(state_dict)
+        USE_ALL_FEA_IN_PRED=False
+        validateMode=True
+
+        event_nos = []
+        zenith = []
+        azimuth = []
+        preds = []
+        print('start predict')
+
+        real_x = []
+        real_y = []
+        real_z = []
+        with torch.no_grad():
+            model.eval()
+            model.to(f'cuda:{device[0]}')
+            for batch in tqdm(val_dataloader):
+
+                pred = model(batch[0].to(f'cuda:{device[0]}'))
+                #preds.append(pred[0])
+                if USE_ALL_FEA_IN_PRED:
+                    preds.append(torch.cat(pred, axis=-1))
+                else:
+                    preds.append(pred[0])
+                event_nos.append(batch[2])
+                if validateMode:
+                    real_x.append(batch[1][:,0])
+                    real_y.append(batch[1][:,1])
+                    real_z.append(batch[1][:,2])
+        preds = torch.cat(preds).to('cpu').detach().numpy()
+        #zenith = torch.cat(zenith).to('cpu').numpy()
+        #azimuth = torch.cat(azimuth).to('cpu').numpy()
+        real_x = torch.cat(real_x).to('cpu').numpy()
+        real_y = torch.cat(real_y).to('cpu').numpy()
+        real_z = torch.cat(real_z).to('cpu').numpy()
+        results = pd.DataFrame(preds, columns=model.prediction_columns)
+        if USE_ALL_FEA_IN_PRED:
+            if preds.shape[1] == 128+8:
+                columns = ['direction_x','direction_y','direction_z','direction_kappa1','direction_x1','direction_y1','direction_z1','direction_kappa'] + [f'idx{i}' for i in range(128)]
+            else:
+                columns = ['direction_x','direction_y','direction_z','direction_kappa'] + [f'idx{i}' for i in range(128)]
+        else:
+            columns=model.prediction_columns
+        results = pd.DataFrame(preds, columns=columns)
+        results['event_no'] = np.concatenate(event_nos)
+        if validateMode:
+            #results['zenith'] = zenith#np.concatenate(zenith)
+            #results['azimuth'] = azimuth#np.concatenate(azimuth)
+            results['real_x'] = real_x
+            results['real_y'] = real_y
+            results['real_z'] = real_z
+
+        results.sort_values('event_no')
+        results.to_csv(f'/remote/ceph/user/l/llorente/prediction_models/stacking_tito/model_checkpoint_graphnet/predictions.csv')

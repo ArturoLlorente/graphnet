@@ -26,7 +26,7 @@ from graphnet.training.labels import Direction
 from graphnet.training.loss_functions import VonMisesFisher3DLoss
 from graphnet.training.callbacks import ProgressBar, PiecewiseLinearLR
 from graphnet.training.utils import make_dataloader
-from graphnet.training.utils import collate_fn, collator_sequence_buckleting
+from graphnet.training.utils import collator_sequence_buckleting
 from graphnet.utilities.logging import Logger
 
 from typing import Dict, List, Optional, Union, Callable, Tuple
@@ -62,7 +62,7 @@ def make_dataloaders(
     loss_weight_column: Optional[str] = None,
     index_column: str = 'event_no',
     labels: Optional[Dict[str, Callable]] = None,
-    collate_fn: Optional[Callable] = collate_fn,
+    collate_fn: Optional[Callable] = collator_sequence_buckleting(),
 ) -> DataLoader:
     
     """Construct `DataLoader` instance."""
@@ -298,7 +298,7 @@ if __name__ == "__main__":
     archive = "/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23"
     weight_column_name = None 
     weight_table_name =  None
-    batch_size = 1000
+    batch_size = 350
     n_epochs = 50
     device = [2]
     num_workers = 16
@@ -309,17 +309,18 @@ if __name__ == "__main__":
     index_column = 'event_no'
     labels = {'direction': Direction()}
     global_pooling_schemes = ["max"]
-    accumulate_grad_batches = {0: 4}
-    num_database_files = 1
-    train_max_pulses = 350
-    val_max_pulses = 350
+    accumulate_grad_batches = {0: 2}
+    num_database_files = 4
+    train_max_pulses = 1000
+    val_max_pulses = 1000
     scheduler_class = PiecewiseLinearLR
     wandb = False
     INFERENCE = False
     ## Diferent models
 
-    #resume_training_path = '/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23/model_checkpoint_graphnet/model6_dynedgeTITO__directionReco_50e_trainMaxPulses1000_valMaxPulses1000_layerSize4_useGGTrue_usePPTrue_batch256_nround50_numDatabaseFiles4-epoch=07-val_loss=-2.652161.ckpt'
-    MODEL = 'model4'
+    resume_training_path = False
+    #resume_training_path = '/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23/model_checkpoint_graphnet/model1_dynedgeTITO_directionReco_50e_trainMaxPulses1000_valMaxPulses1000_layerSize4_useGGTrue_usePPTrue_batch150_numDatabaseFiles4-epoch=04-val_loss=-2.634343.ckpt'
+    MODEL = 'model3'
     use_global_features = use_global_features_all[MODEL]
     use_post_processing_layers = use_post_processing_layers_all[MODEL]
     dyntrans_layer_sizes = dyntrans_layer_sizes_all[MODEL]
@@ -328,7 +329,7 @@ if __name__ == "__main__":
 
     run_name = (f"{MODEL}_NEWTEST_dynedgeTITO_directionReco_{n_epochs}e_trainMaxPulses{train_max_pulses}_valMaxPulses{val_max_pulses}"
                 f"_layerSize{len(dyntrans_layer_sizes)}_useGG{use_global_features}_usePP{use_post_processing_layers}_batch{batch_size}"
-                f"_numDatabaseFiles{num_database_files}")
+                f"_numDatabaseFiles{num_database_files}_accGradBatch{accumulate_grad_batches[0]}")
     #run_name = "dummy"
 
     # Configurations
@@ -339,21 +340,22 @@ if __name__ == "__main__":
     features = FEATURES.ICECUBE86
     truth = TRUTH.ICECUBE86
     
-    #all_databases = ['/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/dev_northern_tracks_muon_labels_v3_part_1.db',
-    #                '/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/dev_northern_tracks_muon_labels_v3_part_2.db',
-    #                '/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/dev_northern_tracks_muon_labels_v3_part_3.db',
-    #                '/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/dev_northern_tracks_muon_labels_v3_part_4.db']
-    ## get selections:
-    #all_selections = [pd.read_csv('/home/iwsatlas1/oersoe/phd/northern_tracks/energy_reconstruction/selections/dev_northern_tracks_muon_labels_v3_part_1_regression_selection.csv'),
-    #                pd.read_csv('/home/iwsatlas1/oersoe/phd/northern_tracks/energy_reconstruction/selections/dev_northern_tracks_muon_labels_v3_part_2_regression_selection.csv'),
-    #                pd.read_csv('/home/iwsatlas1/oersoe/phd/northern_tracks/energy_reconstruction/selections/dev_northern_tracks_muon_labels_v3_part_3_regression_selection.csv'),
-    #                pd.read_csv('/home/iwsatlas1/oersoe/phd/northern_tracks/energy_reconstruction/selections/dev_northern_tracks_muon_labels_v3_part_4_regression_selection.csv')]
-    #
-    #all_databases = all_databases[:num_database_files]
-    #all_selections = all_selections[:num_database_files]
+    all_databases = ['/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/dev_northern_tracks_muon_labels_v3_part_1.db',
+                    '/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/dev_northern_tracks_muon_labels_v3_part_2.db',
+                    '/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/dev_northern_tracks_muon_labels_v3_part_3.db',
+                    '/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/dev_northern_tracks_muon_labels_v3_part_4.db']
+    # get selections:
+    all_selections = [pd.read_csv('/home/iwsatlas1/oersoe/phd/northern_tracks/energy_reconstruction/selections/dev_northern_tracks_muon_labels_v3_part_1_regression_selection.csv'),
+                    pd.read_csv('/home/iwsatlas1/oersoe/phd/northern_tracks/energy_reconstruction/selections/dev_northern_tracks_muon_labels_v3_part_2_regression_selection.csv'),
+                    pd.read_csv('/home/iwsatlas1/oersoe/phd/northern_tracks/energy_reconstruction/selections/dev_northern_tracks_muon_labels_v3_part_3_regression_selection.csv'),
+                    pd.read_csv('/home/iwsatlas1/oersoe/phd/northern_tracks/energy_reconstruction/selections/dev_northern_tracks_muon_labels_v3_part_4_regression_selection.csv')]
+    
+    all_databases = all_databases[:num_database_files]
+    print(f'using {len(all_databases)} databases')
+    all_selections = all_selections[:num_database_files]
 
-    all_databases = ['/remote/ceph/user/l/llorente/northeren_tracks_ensembled/northern_tracks_part5.db']
-    all_selections = [pd.read_csv('/home/iwsatlas1/oersoe/phd/northern_tracks/energy_reconstruction/selections/dev_northern_tracks_muon_labels_v3_part_5_regression_selection.csv')]
+    #all_databases = ['/remote/ceph/user/l/llorente/northeren_tracks_ensembled/northern_tracks_part5.db']
+    #all_selections = [pd.read_csv('/home/iwsatlas1/oersoe/phd/northern_tracks/energy_reconstruction/selections/dev_northern_tracks_muon_labels_v3_part_5_regression_selection.csv')]
     # get_list_of_databases:
     train_selections = []
     for selection in all_selections:
@@ -445,12 +447,14 @@ if __name__ == "__main__":
                       "check_val_every_n_epoch": 1,
                       "precision": 32,
                       }
+        
+        if resume_training_path:
+            fit_params['ckpt_path'] = resume_training_path
             
         model.fit(
             training_dataloader,
             validation_dataloader,
             callbacks=callbacks,
-            #ckpt_path=resume_training_path,
             **fit_params,
         )
         model.save(os.path.join(archive, f"{run_name}.pth"))

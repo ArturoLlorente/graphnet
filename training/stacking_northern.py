@@ -50,10 +50,9 @@ class DatasetStacking(Dataset):
                 
         self.target_columns = target_columns
         self.use_mid_features = use_mid_features
+        self.model_preds[2] = self.model_preds[2].merge(self.model_preds[1]["event_no"], on="event_no", how="inner")
         
         x = []
-        y = []
-        event_nos = []
         for idx, model_pred in enumerate(self.model_preds):
             columns = self.target_columns
             if "direction_kappa" in model_pred.columns:
@@ -133,11 +132,11 @@ if __name__ == "__main__":
     device = [1]
     hidden_size = 132*len(model_names)
     accumulate_grad_batches = {0: 1}
-    max_epochs = 50
+    max_epochs = 20
     batch_size = 5000
     num_workers = 16
 
-    INFERENCE = False
+    INFERENCE = True
 
     runName = f'northern_graphnet_models{run_names}_stacking'
     print("run name is: " , runName)
@@ -150,8 +149,7 @@ if __name__ == "__main__":
         
 
     train_dataset = DatasetStacking(target_columns=['direction_x', 'direction_y', 'direction_z', 'direction_kappa'],
-                                        model_preds=training_predictions,
-                                        )
+                                        model_preds=training_predictions)
     val_dataset = DatasetStacking(target_columns=['direction_x', 'direction_y', 'direction_z', 'direction_kappa'],
                                         model_preds=val_predictions)
     
@@ -243,10 +241,10 @@ if __name__ == "__main__":
             results['real_y'] = real_y
             results['real_z'] = real_z
 
-        #results_merged = results.copy()  # Make a copy of the results DataFrame
-        #for prediction_df in prediction_df:
-        #    event_azimuth_zenith = prediction_df[["event_no", "azimuth", "zenith"]]
-        #    results_merged = results_merged.merge(event_azimuth_zenith, on="event_no", how="left", suffixes=("", "_prediction"))
-        #results_merged.sort_values('event_no')
+        results_merged = results.copy()  # Make a copy of the results DataFrame
+        for prediction_df in prediction_df:
+            event_azimuth_zenith = prediction_df[["event_no", "azimuth", "zenith"]]
+            results_merged = results_merged.merge(event_azimuth_zenith, on="event_no", how="left", suffixes=("", "_prediction"))
+        results_merged.sort_values('event_no')
 
         results.to_csv(f'/remote/ceph/user/l/llorente/prediction_models/stacking_tito/model_checkpoint_graphnet/predictions.csv')

@@ -318,8 +318,8 @@ if __name__ == "__main__":
     INFERENCE = False
     ## Diferent models
 
-    resume_training_path = False
-    #resume_training_path = '/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23/model_checkpoint_graphnet/model1_dynedgeTITO_directionReco_50e_trainMaxPulses1000_valMaxPulses1000_layerSize4_useGGTrue_usePPTrue_batch150_numDatabaseFiles4-epoch=04-val_loss=-2.634343.ckpt'
+    #resume_training_path = False
+    resume_training_path = '/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23/model_checkpoint_graphnet/model3_NEWTEST_dynedgeTITO_directionReco_50e_trainMaxPulses1000_valMaxPulses1000_layerSize3_useGGFalse_usePPFalse_batch350_numDatabaseFiles4_accGradBatch2-epoch=19-val_loss=-2.650039.ckpt'
     MODEL = 'model3'
     use_global_features = use_global_features_all[MODEL]
     use_post_processing_layers = use_post_processing_layers_all[MODEL]
@@ -463,10 +463,11 @@ if __name__ == "__main__":
     else:
         
         all_res = []
-        checkpoint_path = (os.path.join(archive, f"{run_name}_state_dict.pth"))
-        checkpoint_path = '/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23/model_checkpoint_graphnet/model6_dynedgeTITO_directionReco_50e_trainMaxPulses1000_valMaxPulses1000_layerSize4_useGGTrue_usePPTrue_batch128_numDatabaseFiles4-epoch=19-val_loss=-2.670949.ckpt'
+        #checkpoint_path = (os.path.join(archive, f"{run_name}_state_dict.pth"))
+        checkpoint_path = '/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23/model_checkpoint_graphnet/model6_NEWTEST_dynedgeTITO_directionReco_50e_trainMaxPulses1000_valMaxPulses1000_layerSize4_useGGTrue_usePPTrue_batch256_numDatabaseFiles4_accGradBatch2-epoch=32-val_loss=-2.678860.ckpt'
 
-        pulse_breakpoints = [0, 500, 1000, 1500, 2000, 3000]
+        factor = 1/3
+        pulse_breakpoints = [0, 500, 1000, 1500, 2000, 3000]*factor
         batch_sizes_per_pulse = [1750, 150, 25, 15, 5]
         
         for min_pulse, max_pulse in zip(pulse_breakpoints[:-1], pulse_breakpoints[1:]):

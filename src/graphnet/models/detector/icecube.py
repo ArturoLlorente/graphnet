@@ -19,6 +19,7 @@ class IceCube86(Detector):
             "charge": self._charge,
             "rde": self._rde,
             "pmt_area": self._pmt_area,
+            "hlc": self._hlc,
         }
         return feature_map
 
@@ -36,6 +37,9 @@ class IceCube86(Detector):
 
     def _pmt_area(self, x: torch.tensor) -> torch.tensor:
         return x / 0.05
+    
+    def _hlc(self, x: torch.tensor) -> torch.tensor:
+        return torch.where(torch.eq(x, 0), torch.ones_like(x), torch.ones_like(x)*0)
 
 
 class IceCubeKaggle(Detector):

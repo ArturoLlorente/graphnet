@@ -32,8 +32,33 @@ def convert_horizontal_to_direction(azimuth, zenith):
     dir_x = np.sin(zenith) * np.cos(azimuth)
     dir_y = np.sin(zenith) * np.sin(azimuth)
     return dir_x, dir_y, dir_z
-    
 
+from graphnet.models.task import Task
+class DirectionReconstructionWithKappaTITO(Task):
+    """Reconstructs direction with kappa from the 3D-vMF distribution."""
+
+    # Requires three features: untransformed points in (x,y,z)-space.
+    default_target_labels = [
+        "direction"
+    ]  # contains dir_x, dir_y, dir_z see https://github.com/graphnet-team/graphnet/blob/95309556cfd46a4046bc4bd7609888aab649e295/src/graphnet/training/labels.py#L29
+    default_prediction_labels = [
+        "dir_x_pred",
+        "dir_y_pred",
+        "dir_z_pred",
+        "direction_kappa",
+    ]
+    nb_inputs = 3
+
+    def _forward(self, x: Tensor) -> Tensor:
+        # Transform outputs to angle and prepare prediction
+        #kappa = torch.linalg.vector_norm(x, dim=1) + eps_like(x)
+        kappa = torch.linalg.vector_norm(x, dim=1)# + eps_like(x)
+        kappa = torch.clamp(kappa, min=torch.finfo(x.dtype).eps)
+        vec_x = x[:, 0] / kappa
+        vec_y = x[:, 1] / kappa
+        vec_z = x[:, 2] / kappa
+        return torch.stack((vec_x, vec_y, vec_z, kappa), dim=1)
+    
 class DatasetStacking(Dataset):
     def __init__(self,
                  target_columns: Union[List[str], str] = ["direction_x", "direction_y", "direction_z", "direction_kappa"],
@@ -50,10 +75,10 @@ class DatasetStacking(Dataset):
                 
         self.target_columns = target_columns
         self.use_mid_features = use_mid_features
-        self.model_preds[2] = self.model_preds[2].merge(self.model_preds[1]["event_no"], on="event_no", how="inner")
+        #self.model_preds[2] = self.model_preds[2].merge(self.model_preds[1]["event_no"], on="event_no", how="inner")
         
         x = []
-        for idx, model_pred in enumerate(self.model_preds):
+        for model_pred in self.model_preds:
             columns = self.target_columns
             if "direction_kappa" in model_pred.columns:
                 model_pred["direction_kappa"]=np.log1p(model_pred["direction_kappa"])
@@ -88,7 +113,13 @@ def build_model_stacking(
     ):
 
     
-    task = DirectionReconstructionWithKappa(
+    task = DirectionReconstructionWithKappaTITO(
+        hidden_size=hidden_size,
+        target_labels="direction",
+        loss_function=VonMisesFisher3DLoss(),
+    )
+
+    task2 = DirectionReconstructionWithKappa(
         hidden_size=hidden_size,
         target_labels="direction",
         loss_function=VonMisesFisher3DLoss(),
@@ -102,7 +133,7 @@ def build_model_stacking(
     }
 
     model = StandardModelStacking(
-        tasks=[task],
+        tasks=[task, task2],
         n_input_features=dataset.n_columns(),
         hidden_size=hidden_size,
         dataset=dataset,
@@ -119,17 +150,19 @@ def build_model_stacking(
 
 if __name__ == "__main__":
 
-    model_names = ['model1_1000pulses_northern_tracks_graphnet',
-         'model4_300pulses_northern_tracks_graphnet',
-         'model6_1000pulses_northern_tracks_graphnet', 
-         'model3_1000pulses_northern_tracks_graphnet']
+    model_names = ['model1_northern_load_tito',
+                   'model2_northern_load_tito',
+                   'model3_northern_load_tito', 
+                   'model4_northern_load_tito',
+                   'model5_northern_load_tito',
+                   'model6_northern_load_tito',]
     run_names = ''
     prediction_df = []
     for model_name in model_names:
         prediction_df.append(pd.read_csv(f'/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23/prediction_models/{model_name}.csv'))
         run_names = run_names + model_name[:11] + '_'
 
-    device = [1]
+    device = [2]
     hidden_size = 132*len(model_names)
     accumulate_grad_batches = {0: 1}
     max_epochs = 20
@@ -144,8 +177,9 @@ if __name__ == "__main__":
     training_predictions = []
     val_predictions = []
     for pred_df in prediction_df:
-        training_predictions.append(pred_df[int(len(pred_df)*0.8):])
-        val_predictions.append(pred_df[:int(len(pred_df)*0.8)])
+        #training_predictions.append(pred_df[int(len(pred_df)*0.8):])
+        #val_predictions.append(pred_df[:int(len(pred_df)*0.8)])
+        val_predictions.append(pred_df)
         
 
     train_dataset = DatasetStacking(target_columns=['direction_x', 'direction_y', 'direction_z', 'direction_kappa'],
@@ -199,7 +233,7 @@ if __name__ == "__main__":
 
 
         from tqdm.auto import tqdm
-        CKPT = f'/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23/model_stacking/'+runName+'-last_state_dict.pth'
+        CKPT = f'/remote/ceph/user/l/llorente/tito_solution/model_graphnet/stacking-6models-last.pth'
         state_dict =  torch.load(CKPT, torch.device('cpu'))
 
         if 'state_dict' in state_dict.keys():
@@ -247,4 +281,4 @@ if __name__ == "__main__":
             results_merged = results_merged.merge(event_azimuth_zenith, on="event_no", how="left", suffixes=("", "_prediction"))
         results_merged.sort_values('event_no')
 
-        results.to_csv(f'/remote/ceph/user/l/llorente/prediction_models/stacking_tito/model_checkpoint_graphnet/predictions.csv')
+        results.to_csv(f'/remote/ceph/user/l/llorente/prediction_models/stacking_tito/model_checkpoint_graphnet/model_stacking_northern_load_tito.csv')

@@ -362,6 +362,7 @@ if __name__ == "__main__":
         "wandb": False,
         "resume_training_path": None,#('/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23/model_checkpoint_graphnet/'
                                 #'model4_NEWTEST_dynedgeTITO_directionReco_50e_trainMaxPulses350_valMaxPulses350_layerSize3_useGGTrue_usePPTrue_batch1000_numDatabaseFiles1-epoch=01-val_loss=-2.374774.ckpt'),
+        "retrain_from_checkpoint": None
     }
     config['additional_attributes'] = ['zenith', 'azimuth', config['index_column'], 'energy']
     MODEL = sys.argv[1] #'model1'
@@ -386,14 +387,22 @@ if __name__ == "__main__":
     torch.multiprocessing.set_sharing_strategy('file_system')
     torch.multiprocessing.set_start_method('spawn', force=True)
 
-    all_databases = ['/remote/ceph/user/l/llorente/northeren_tracks_ensembled/northern_tracks_part1.db']
-    all_selections = [pd.read_csv('/remote/ceph/user/l/llorente/northern_track_selection/part_1.csv')]
+    
+    db_dir = '/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/'
+    all_databases, all_selections = [], []
+    test_idx = 5
+    for idx in range(1,9):
+        if idx == test_idx:
+            test_database = f'dev_northern_tracks_muon_labels_v3_part_{idx}.db'
+            test_selection = pd.read_csv('/remote/ceph/user/l/llorente/northern_track_selection/part_5.csv')
+        else:
+            all_databases.append(f'dev_northern_tracks_muon_labels_v3_part_{idx}.db')
+            all_selections.append(pd.read_csv('/remote/ceph/user/l/llorente/northern_track_selection/part_5.csv'))
     # get_list_of_databases:
     train_selections = []
     for selection in all_selections:
         train_selections.append(selection.loc[selection['n_pulses'] < config['train_max_pulses'],:][config['index_column']].ravel().tolist())
     train_selections[-1] = train_selections[-1][:int(len(train_selections[-1])*0.9)]
-    
     val_selection = selection.loc[(selection['n_pulses'] < config['val_max_pulses']),:][config['index_column']].ravel().tolist()
     val_selection = val_selection[int(len(val_selection)*0.9):]
 
@@ -446,8 +455,18 @@ if __name__ == "__main__":
     model = build_model(config)
     
     if not INFERENCE:
+        
+        config['retrain_from_checkpoint'] = f'/remote/ceph/user/l/llorente/tito_solution/model_graphnet/{MODEL}-last.pth'
+        
         if config['resume_training_path']:
             config['fit']['resume_training_path'] = config['resume_training_path']
+            
+        if config['retrain_from_checkpoint']:
+            checkpoint_path = config['retrain_from_checkpoint']           
+            checkpoint = torch.load(checkpoint_path, torch.device('cpu'))
+            if 'state_dict' in checkpoint:
+                checkpoint = checkpoint['state_dict']
+            model.load_state_dict(checkpoint)
             
         model.fit(
             training_dataloader,
@@ -463,9 +482,6 @@ if __name__ == "__main__":
         all_res = []
         #checkpoint_path = (os.path.join(config['archive'], f"{run_name}_state_dict.pth"))
         checkpoint_path = f'/remote/ceph/user/l/llorente/tito_solution/model_graphnet/{MODEL}-last.pth'
-
-        test_path = '/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/dev_northern_tracks_muon_labels_v3_part_5.db'
-        test_selection_file = pd.read_csv('/remote/ceph/user/l/llorente/northern_track_selection/part_5.csv')
 
         factor = 1
         pulse_breakpoints = [0, 500, 1000, 1500, 2000, 3000]#, 10000]

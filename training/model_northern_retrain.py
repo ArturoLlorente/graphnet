@@ -16,20 +16,18 @@ from graphnet.data.dataset import SQLiteDataset
 from graphnet.data.constants import FEATURES, TRUTH
 
 from graphnet.models import StandardModel, StandardModelPred
-from graphnet.models.detector.icecube import IceCube86
 from graphnet.models.graphs import KNNGraph
 from graphnet.models.gnn import DynEdgeTITO
 from graphnet.models.graphs.nodes import NodesAsPulses
 from graphnet.models.task.reconstruction import DirectionReconstructionWithKappa
 
 from graphnet.training.labels import Direction
-from graphnet.training.loss_functions import VonMisesFisher3DLoss
+from graphnet.training.loss_functions import VonMisesFisher3DLoss, LossFunction
 from graphnet.training.callbacks import ProgressBar, PiecewiseLinearLR
 from graphnet.training.utils import make_dataloader
 from graphnet.training.utils import collate_fn, collator_sequence_buckleting
-from graphnet.utilities.logging import Logger
 
-from typing import Dict, List, Optional, Union, Callable, Tuple, Any
+from typing import Dict, List, Optional, Union, Callable, Any
 from torch.utils.data import DataLoader
 
 
@@ -53,49 +51,48 @@ class IceCube86TITO(Detector):
         }
         return feature_map
 
-    def _dom_xyz(self, x: torch.tensor) -> torch.tensor:
+    def _dom_xyz(self, x: torch.Tensor) -> torch.Tensor:
         return x / 500.0
 
-    def _dom_time(self, x: torch.tensor) -> torch.tensor:
+    def _dom_time(self, x: torch.Tensor) -> torch.Tensor:
         return (x - 1.0e04) / (500.0*0.23)
 
-    def _charge(self, x: torch.tensor) -> torch.tensor:
+    def _charge(self, x: torch.Tensor) -> torch.Tensor:
         return torch.log10(x)
 
-    def _rde(self, x: torch.tensor) -> torch.tensor:
+    def _rde(self, x: torch.Tensor) -> torch.Tensor:
         return (x - 1.25) / 0.25
 
-    def _pmt_area(self, x: torch.tensor) -> torch.tensor:
+    def _pmt_area(self, x: torch.Tensor) -> torch.Tensor:
         return x / 0.05
     
-    def _hlc(self, x: torch.tensor) -> torch.tensor:
+    def _hlc(self, x: torch.Tensor) -> torch.Tensor:
         return torch.where(torch.eq(x, 0), torch.ones_like(x), torch.ones_like(x)*0)
-
 class DirectionReconstructionWithKappaTITO(Task):
-    """Reconstructs direction with kappa from the 3D-vMF distribution."""
-
-    # Requires three features: untransformed points in (x,y,z)-space.
-    default_target_labels = [
-        "direction"
-    ]  # contains dir_x, dir_y, dir_z see https://github.com/graphnet-team/graphnet/blob/95309556cfd46a4046bc4bd7609888aab649e295/src/graphnet/training/labels.py#L29
-    default_prediction_labels = [
-        "dir_x_pred",
-        "dir_y_pred",
-        "dir_z_pred",
-        "direction_kappa",
-    ]
+    default_target_labels = ["direction"]
+    default_prediction_labels = ["dir_x_pred","dir_y_pred","dir_z_pred","direction_kappa"]
     nb_inputs = 3
-
     def _forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Transform outputs to angle and prepare prediction
-        #kappa = torch.linalg.vector_norm(x, dim=1) + eps_like(x)
-        kappa = torch.linalg.vector_norm(x, dim=1)# + eps_like(x)
+        kappa = torch.linalg.vector_norm(x, dim=1)
         kappa = torch.clamp(kappa, min=torch.finfo(x.dtype).eps)
         vec_x = x[:, 0] / kappa
         vec_y = x[:, 1] / kappa
         vec_z = x[:, 2] / kappa
         return torch.stack((vec_x, vec_y, vec_z, kappa), dim=1)
-    
+class DistanceLoss2(LossFunction):
+    def _forward(self, prediction: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        target = target.reshape(-1, 3)
+        assert prediction.dim() == 2 and prediction.size()[1] == 4
+        assert target.dim() == 2
+        assert prediction.size()[0] == target.size()[0]
+        eps = 1e-4
+        prediction_length = torch.linalg.vector_norm(prediction[:, [0, 1, 2]], dim=1)
+        prediction_length = torch.clamp(prediction_length, min=eps)
+        prediction =  prediction[:, [0, 1, 2]]/prediction_length.unsqueeze(1)
+        cosLoss = prediction[:, 0] * target[:, 0] + prediction[:, 1] * target[:, 1] + prediction[:, 2] * target[:, 2]    
+        cosLoss = torch.clamp(cosLoss, min=-1+eps, max=1-eps)
+        thetaLoss = torch.arccos(cosLoss)
+        return thetaLoss
     
 use_global_features_all = {'model1': True, 'model2': True, 'model3': False, 'model4': True, 'model5': True, 'model6': True}
 use_post_processing_layers_all = {'model1': True, 'model2': True, 'model3': False, 'model4': True, 'model5': True, 'model6': True}
@@ -118,6 +115,7 @@ def make_dataloaders(
     # Check(s)
     if isinstance(config['pulsemap'], str):
         config['pulsemap'] = [config['pulsemap']]
+    assert isinstance(train_selection, list)
     if isinstance(db, list):
         assert len(train_selection) == len(db)
         train_datasets = []
@@ -158,35 +156,39 @@ def make_dataloaders(
             prefetch_factor=2
         )
 
-        val_dataset = SQLiteDataset(
-                        path = db[-1],
-                        graph_definition=config['graph_definition'],
-                        pulsemaps=config['pulsemap'],
-                        features=config['features'],
-                        truth=config['truth'],
-                        selection=val_selection,
-                        node_truth=config['node_truth'],
-                        truth_table=config['truth_table'],
-                        node_truth_table=config['node_truth_table'],
-                        string_selection=config['string_selection'],
-                        loss_weight_table=config['loss_weight_table'],
-                        loss_weight_column=config['loss_weight_column'],
-                        index_column=config['index_column'],
-        )
-        
-        if isinstance(config['labels'], dict):
-            for label in config['labels'].keys():
-                val_dataset.add_label(key=label, fn=config['labels'][label])
-        
-        validation_dataloader = DataLoader(
-            dataset=val_dataset,
-            batch_size=config['batch_size'],
-            shuffle=False,
-            num_workers=config['num_workers'],
-            collate_fn=config['collate_fn'],
-            persistent_workers=config['persistent_workers'],
-            prefetch_factor=2,
-        )
+        if val_selection is not None:
+            val_dataset = SQLiteDataset(
+                            path = db[-1],
+                            graph_definition=config['graph_definition'],
+                            pulsemaps=config['pulsemap'],
+                            features=config['features'],
+                            truth=config['truth'],
+                            selection=val_selection,
+                            node_truth=config['node_truth'],
+                            truth_table=config['truth_table'],
+                            node_truth_table=config['node_truth_table'],
+                            string_selection=config['string_selection'],
+                            loss_weight_table=config['loss_weight_table'],
+                            loss_weight_column=config['loss_weight_column'],
+                            index_column=config['index_column'],
+            )
+            
+            if isinstance(config['labels'], dict):
+                for label in config['labels'].keys():
+                    val_dataset.add_label(key=label, fn=config['labels'][label])
+            
+            validation_dataloader = DataLoader(
+                dataset=val_dataset,
+                batch_size=config['batch_size'],
+                shuffle=False,
+                num_workers=config['num_workers'],
+                collate_fn=config['collate_fn'],
+                persistent_workers=config['persistent_workers'],
+                prefetch_factor=2,
+            )
+        else:
+            validation_dataloader = None
+            val_dataset = None
         
                     
     return training_dataloader, validation_dataloader, train_dataset, val_dataset
@@ -207,7 +209,7 @@ def build_model(
     task = DirectionReconstructionWithKappaTITO(
             hidden_size=gnn.nb_outputs,
             target_labels="direction",
-            loss_function=VonMisesFisher3DLoss(),
+            loss_function=DistanceLoss2(),
         )
     task2 = DirectionReconstructionWithKappa(
         hidden_size=gnn.nb_outputs,
@@ -334,8 +336,8 @@ if __name__ == "__main__":
         "labels": {'direction': Direction()},
         "global_pooling_schemes": ["max"],
         "accumulate_grad_batches": {0: 2},
-        "train_max_pulses": 500,
-        "val_max_pulses": 500,
+        "train_range_pulses": [150000,152000],
+        "val_range_pulses": [0,500],
         "num_database_files": 1,
         "node_truth_table": None,
         "node_truth": None,
@@ -349,14 +351,14 @@ if __name__ == "__main__":
         "features": ['dom_x', 'dom_y', 'dom_z', 'dom_time', 'charge', 'hlc'],
         "truth": TRUTH.ICECUBE86,
         "columns_nearest_neighbours": [0, 1, 2],
-        "collate_fn": collator_sequence_buckleting(),
+        "collate_fn": collate_fn,
         "prediction_columns": ['dir_x_pred', 'dir_y_pred', 'dir_z_pred', 'dir_kappa_pred'],
         "fit": {
-            "max_epochs": 50,
-            "gpus": [sys.argv[2]],
+            "max_epochs": 20,
+            "gpus": [3],
             "distribution_strategy": 'ddp',
             "check_val_every_n_epoch": 1,
-            "precision": 32,
+            "precision": 16,
         },
         "scheduler_class": PiecewiseLinearLR,
         "wandb": False,
@@ -365,8 +367,8 @@ if __name__ == "__main__":
         "retrain_from_checkpoint": None
     }
     config['additional_attributes'] = ['zenith', 'azimuth', config['index_column'], 'energy']
-    MODEL = sys.argv[1] #'model1'
-    INFERENCE = True
+    MODEL = 'model5'
+    INFERENCE = False
 
 
     #ICECUBE86 = ["dom_x","dom_y","dom_z","dom_time","charge","hlc"]
@@ -378,10 +380,11 @@ if __name__ == "__main__":
     config["columns_nearest_neighbours"] = columns_nearest_neighbours_all[MODEL]
 
 
-    run_name = (f"{MODEL}_NEWTEST_dynedgeTITO_directionReco_{config['fit']['max_epochs']}e_trainMaxPulses{config['train_max_pulses']}_valMaxPulses{config['val_max_pulses']}"
-                f"_layerSize{len(config['dyntrans_layer_sizes'])}_useGG{config['use_global_features']}_usePP{config['use_post_processing_layers']}_batch{config['batch_size']}"
-                f"_numDatabaseFiles{config['num_database_files']}")
-    #run_name = "dummy"
+    #run_name = (f"{MODEL}_NEWTEST_dynedgeTITO_directionReco_{config['fit']['max_epochs']}e_trainMaxPulses{config['train_range_pulses'][0]}_"
+    #            f"trainMinPulses{config['train_range_pulses'][1]}_valMaxPulses{config['val_max_pulses']}_layerSize{len(config['dyntrans_layer_sizes'])}"
+    #            f"_useGG{config['use_global_features']}_usePP{config['use_post_processing_layers']}_batch{config['batch_size']}"
+    #            f"_numDatabaseFiles{config['num_database_files']}")
+    run_name = "dummy"
 
     # Configurations
     torch.multiprocessing.set_sharing_strategy('file_system')
@@ -390,26 +393,34 @@ if __name__ == "__main__":
     
     db_dir = '/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/'
     all_databases, all_selections = [], []
-    test_idx = 5
-    for idx in range(1,9):
-        if idx == test_idx:
-            test_database = f'dev_northern_tracks_muon_labels_v3_part_{idx}.db'
-            test_selection = pd.read_csv('/remote/ceph/user/l/llorente/northern_track_selection/part_5.csv')
-        else:
-            all_databases.append(f'dev_northern_tracks_muon_labels_v3_part_{idx}.db')
-            all_selections.append(pd.read_csv('/remote/ceph/user/l/llorente/northern_track_selection/part_5.csv'))
-    # get_list_of_databases:
-    train_selections = []
-    for selection in all_selections:
-        train_selections.append(selection.loc[selection['n_pulses'] < config['train_max_pulses'],:][config['index_column']].ravel().tolist())
-    train_selections[-1] = train_selections[-1][:int(len(train_selections[-1])*0.9)]
-    val_selection = selection.loc[(selection['n_pulses'] < config['val_max_pulses']),:][config['index_column']].ravel().tolist()
-    val_selection = val_selection[int(len(val_selection)*0.9):]
-
+    #test_idx = 5
+    #for idx in range(1,9):
+    #    if idx == test_idx: 
+    #        test_database = db_dir + f'dev_northern_tracks_muon_labels_v3_part_{idx}.db'
+    #        test_selection = pd.read_csv(f'/remote/ceph/user/l/llorente/northern_track_selection/part_{idx}.csv')
+    #    else:
+    #        all_databases.append(db_dir + f'dev_northern_tracks_muon_labels_v3_part_{idx}.db')
+    #        all_selections.append(pd.read_csv(f'/remote/ceph/user/l/llorente/northern_track_selection/part_{idx}.csv'))
+    ## get_list_of_databases:
+    #train_selections = []
+    #for selection in all_selections:
+    #    train_selections.append(selection.loc[selection['n_pulses'] < config['train_max_pulses'],:][config['index_column']].ravel().tolist())
+    #train_selections[-1] = train_selections[-1][:int(len(train_selections[-1])*0.9)]
+    #val_selection = selection.loc[(selection['n_pulses'] < config['val_max_pulses']),:][config['index_column']].ravel().tolist()
+    #val_selection = val_selection[int(len(val_selection)*0.9):]
+    
+    all_databases.append(db_dir + f'dev_northern_tracks_muon_labels_v3_part_1.db')
+    all_selections = pd.read_csv(f'/remote/ceph/user/l/llorente/northern_track_selection/part_1.csv')
+    train_selections = [all_selections.loc[(all_selections['n_pulses'] < config['train_range_pulses'][0])&
+                                          (all_selections['n_pulses'] < config['train_range_pulses'][1]),:][config['index_column']].ravel().tolist()]
+    val_selection = None
+    test_database = None
+    test_selection = None
+    
     config["graph_definition"] = KNNGraph(detector=config["detector"],
                                           node_definition=config["node_definition"],
                                           nb_nearest_neighbours=config["nb_nearest_neighbours"],
-                                          node_feature_names=config["features"],
+                                          input_feature_names=config["features"],
                                           columns=config["columns_nearest_neighbours"],
                                         )
 
@@ -438,18 +449,18 @@ if __name__ == "__main__":
 
         callbacks = [
             EarlyStopping(monitor='val_loss', patience=config['early_stopping_patience']),
-            ModelCheckpoint(
+            ProgressBar(),
+            GradientAccumulationScheduler(scheduling=config['accumulate_grad_batches']),
+            #LearningRateMonitor(logging_interval='step'),
+        ]
+        if validation_dataloader is not None:
+            callbacks.append(ModelCheckpoint(
                 dirpath=config['archive']+'/model_checkpoint_graphnet/',
                 filename=run_name+'-{epoch:02d}-{val_loss:.6f}',
                 monitor= 'val_loss',
                 save_top_k = 30,
                 every_n_epochs = 1,
-                save_weights_only=False,
-            ),
-            ProgressBar(),
-            GradientAccumulationScheduler(scheduling=config['accumulate_grad_batches']),
-            LearningRateMonitor(logging_interval='step'),
-        ]
+                save_weights_only=False))
 
     print("Starting training")
     model = build_model(config)
@@ -460,17 +471,18 @@ if __name__ == "__main__":
         
         if config['resume_training_path']:
             config['fit']['resume_training_path'] = config['resume_training_path']
-            
         if config['retrain_from_checkpoint']:
             checkpoint_path = config['retrain_from_checkpoint']           
             checkpoint = torch.load(checkpoint_path, torch.device('cpu'))
             if 'state_dict' in checkpoint:
                 checkpoint = checkpoint['state_dict']
             model.load_state_dict(checkpoint)
+        if validation_dataloader is not None:
+            config['validation_dataloader'] = validation_dataloader
+            
             
         model.fit(
             training_dataloader,
-            validation_dataloader,
             callbacks=callbacks,
             **config['fit'],
         )
@@ -496,8 +508,8 @@ if __name__ == "__main__":
                                 batch_size=int(factor*batch_sizes_per_pulse[pulse_breakpoints.index(max_pulse)-1]), 
                                 checkpoint_path=checkpoint_path, 
                                 use_all_features_in_prediction=True,
-                                test_path=test_path,
-                                test_selection_file=test_selection_file,
+                                test_path=test_database,
+                                test_selection_file=test_selection,
                                 config=config)
             all_res.append(results)
             del results

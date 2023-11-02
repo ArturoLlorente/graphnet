@@ -16,6 +16,11 @@ class sensitivity_plots:
                  z_pred_label: str = 'direction_z',
                  truth_table = 'truth'):
         
+        if not isinstance(df_original, pd.DataFrame):
+            raise TypeError('df_original must be a pandas DataFrame')
+        if not isinstance(db, str):
+            raise TypeError('database must be a string')
+        
         self.df_original = df_original
         self.db = db
         self.pulsemaps = pulsemaps

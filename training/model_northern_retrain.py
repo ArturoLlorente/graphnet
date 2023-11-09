@@ -70,7 +70,7 @@ class IceCube86TITO(Detector):
         return torch.where(torch.eq(x, 0), torch.ones_like(x), torch.ones_like(x)*0)
 class DirectionReconstructionWithKappaTITO(Task):
     default_target_labels = ["direction"]
-    default_prediction_labels = ["dir_x_pred","dir_y_pred","dir_z_pred","direction_kappa"]
+    default_prediction_labels = ["dir_x_pred","dir_y_pred","dir_z_pred","dir_kappa_pred"]
     nb_inputs = 3
     def _forward(self, x: torch.Tensor) -> torch.Tensor:
         kappa = torch.linalg.vector_norm(x, dim=1)
@@ -94,6 +94,75 @@ class DistanceLoss2(LossFunction):
         thetaLoss = torch.arccos(cosLoss)
         return thetaLoss
     
+from torch_geometric.data import Data, Batch
+
+class DynamicCollator:
+    def __init__(self, max_vram: int, max_n_pulses: int):
+        self.max_vram = max_vram
+        self.max_n_pulses = max_n_pulses
+
+    def __call__(self, graphs: List[Data]) -> List[Batch]:
+        # Filter out graphs with n_pulses <= 1 and sort by n_pulses
+        graphs = [g for g in graphs if g.n_pulses > 1]
+        graphs.sort(key=lambda x: x.n_pulses)
+        
+        batch_list = []
+        current_batch = []
+        current_batch_size = 0
+
+        for graph in graphs:
+            # Calculate the expected memory usage for the current graph
+            graph_memory = self.calculate_graph_memory_usage(graph)
+            
+            # If adding the current graph to the batch exceeds the VRAM limit or
+            # the batch size exceeds your desired limit based on n_pulses, create a new batch.
+            if current_batch_size + graph_memory > self.max_vram or len(current_batch) >= self.max_batch_size_for_n_pulses(graph.n_pulses):
+                if len(current_batch) > 0:
+                    batch = Batch.from_data_list(current_batch)
+                    batch_list.append(batch)
+                current_batch = []
+                current_batch_size = 0
+                
+            current_batch.append(graph)
+            current_batch_size += graph_memory
+
+        # Process the last batch
+        if len(current_batch) > 0:
+            batch = Batch.from_data_list(current_batch)
+            batch_list.append(batch)
+
+        return batch_list
+class DynamicCollator:
+    def __init__(self, max_vram: int):
+        self.max_vram = max_vram
+
+    def __call__(self, graphs: List[Data]) -> List[Batch]:
+        # Filter out graphs with n_pulses <= 1
+        graphs = [g for g in graphs if g.n_pulses > 1]
+        graphs.sort(key=lambda x: x.n_pulses)
+        batch_list = []
+        current_batch = []
+
+        for graph in graphs:
+            # Calculate VRAM usage for the current batch
+            current_batch.append(graph)
+            current_batch_size = len(current_batch) * graph.num_nodes  # You can adjust this based on your actual VRAM constraints
+            print("current batch size: ", current_batch_size)
+
+            if current_batch_size > self.max_vram:
+                if len(current_batch) > 0:
+                    batch = Batch.from_data_list(current_batch)
+                    batch_list.append(batch)
+                current_batch = [graph]
+        
+        # Process the last batch
+        if len(current_batch) > 0:
+            batch = Batch.from_data_list(current_batch)
+            batch_list.append(batch)
+
+        return batch_list
+
+
 use_global_features_all = {'model1': True, 'model2': True, 'model3': False, 'model4': True, 'model5': True, 'model6': True}
 use_post_processing_layers_all = {'model1': True, 'model2': True, 'model3': False, 'model4': True, 'model5': True, 'model6': True}
 dyntrans_layer_sizes_all = {'model1': [(256, 256), (256, 256), (256, 256), (256, 256)],
@@ -217,8 +286,8 @@ def build_model(
         loss_function=VonMisesFisher3DLoss(),
     )
 
-    if INFERENCE:
-        model = StandardModelPred(
+    if not INFERENCE:
+        model = StandardModel(
                 graph_definition=config['graph_definition'],
                 gnn=gnn,
                 tasks=[task, task2],
@@ -229,16 +298,17 @@ def build_model(
                 scheduler_config={'interval': 'step'},
             )
     else:
-        model = StandardModel(
+        model = StandardModelPred(
                 graph_definition=config['graph_definition'],
                 gnn=gnn,
-                tasks=[task],
+                tasks=[task, task2],
                 optimizer_class=Adam,
                 optimizer_kwargs={'lr': 1e-03, 'eps': 1e-03},
                 scheduler_class= config['scheduler_class'],
                 scheduler_kwargs=config['scheduler_kwargs'],
                 scheduler_config={'interval': 'step'},
             )
+
     model.prediction_columns = config['prediction_columns']
     model.additional_attributes = config['additional_attributes']
     
@@ -327,17 +397,17 @@ if __name__ == "__main__":
         "target": 'direction',
         "weight_column_name": None,
         "weight_table_name": None,
-        "batch_size": 128,
-        "early_stopping_patience": 10,
-        "num_workers": 16,
+        "batch_size": 2,
+        "early_stopping_patience": 20,
+        "num_workers": 64,
         "pulsemap": 'InIceDSTPulses',
         "truth_table": 'truth',
         "index_column": 'event_no',
         "labels": {'direction': Direction()},
         "global_pooling_schemes": ["max"],
-        "accumulate_grad_batches": {0: 2},
-        "train_range_pulses": [150000,152000],
-        "val_range_pulses": [0,500],
+        "accumulate_grad_batches": {0: 1},
+        "train_max_pulses": [12990, 13000],
+        "val_max_pulses": 500,
         "num_database_files": 1,
         "node_truth_table": None,
         "node_truth": None,
@@ -351,22 +421,19 @@ if __name__ == "__main__":
         "features": ['dom_x', 'dom_y', 'dom_z', 'dom_time', 'charge', 'hlc'],
         "truth": TRUTH.ICECUBE86,
         "columns_nearest_neighbours": [0, 1, 2],
-        "collate_fn": collate_fn,
+        "collate_fn": collator_sequence_buckleting([1/2]),
         "prediction_columns": ['dir_x_pred', 'dir_y_pred', 'dir_z_pred', 'dir_kappa_pred'],
         "fit": {
             "max_epochs": 20,
-            "gpus": [3],
-            "distribution_strategy": 'ddp',
+            "gpus": [2,3],
             "check_val_every_n_epoch": 1,
-            "precision": 16,
+            "precision": '16-mixed',
         },
         "scheduler_class": PiecewiseLinearLR,
         "wandb": False,
-        "resume_training_path": None,#('/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23/model_checkpoint_graphnet/'
-                                #'model4_NEWTEST_dynedgeTITO_directionReco_50e_trainMaxPulses350_valMaxPulses350_layerSize3_useGGTrue_usePPTrue_batch1000_numDatabaseFiles1-epoch=01-val_loss=-2.374774.ckpt'),
-        "retrain_from_checkpoint": None
+        "resume_training_path": None,
     }
-    config['additional_attributes'] = ['zenith', 'azimuth', config['index_column'], 'energy']
+    
     MODEL = 'model5'
     INFERENCE = False
 
@@ -378,18 +445,20 @@ if __name__ == "__main__":
     config["use_post_processing_layers"] = use_post_processing_layers_all[MODEL]
     config["dyntrans_layer_sizes"] = dyntrans_layer_sizes_all[MODEL]
     config["columns_nearest_neighbours"] = columns_nearest_neighbours_all[MODEL]
+    config['additional_attributes'] = ['zenith', 'azimuth', config['index_column'], 'energy']
+    if len(config['fit']['gpus']) > 1:
+        config['fit']['distribution_strategy'] = 'ddp'
 
-
-    #run_name = (f"{MODEL}_NEWTEST_dynedgeTITO_directionReco_{config['fit']['max_epochs']}e_trainMaxPulses{config['train_range_pulses'][0]}_"
-    #            f"trainMinPulses{config['train_range_pulses'][1]}_valMaxPulses{config['val_max_pulses']}_layerSize{len(config['dyntrans_layer_sizes'])}"
+    #run_name = (f"{MODEL}_NEWTEST_dynedgeTITO_directionReco_{config['fit']['max_epochs']}e_trainMaxPulses{config['train_max_pulses'][0]}_"
+    #            f"trainMinPulses{config['train_max_pulses'][1]}_valMaxPulses{config['val_max_pulses']}_layerSize{len(config['dyntrans_layer_sizes'])}"
     #            f"_useGG{config['use_global_features']}_usePP{config['use_post_processing_layers']}_batch{config['batch_size']}"
     #            f"_numDatabaseFiles{config['num_database_files']}")
     run_name = "dummy"
 
     # Configurations
     torch.multiprocessing.set_sharing_strategy('file_system')
-    torch.multiprocessing.set_start_method('spawn', force=True)
-
+    #torch.multiprocessing.set_start_method('spawn', force=True)
+    torch.set_float32_matmul_precision('high')
     
     db_dir = '/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/'
     all_databases, all_selections = [], []
@@ -411,8 +480,10 @@ if __name__ == "__main__":
     
     all_databases.append(db_dir + f'dev_northern_tracks_muon_labels_v3_part_1.db')
     all_selections = pd.read_csv(f'/remote/ceph/user/l/llorente/northern_track_selection/part_1.csv')
-    train_selections = [all_selections.loc[(all_selections['n_pulses'] < config['train_range_pulses'][0])&
-                                          (all_selections['n_pulses'] < config['train_range_pulses'][1]),:][config['index_column']].ravel().tolist()]
+    train_selections = [all_selections.loc[
+                                (all_selections['n_pulses'] >= config['train_max_pulses'][0])&
+                                (all_selections['n_pulses'] < config['train_max_pulses'][1]),:
+                                ][config['index_column']].ravel().tolist()]
     val_selection = None
     test_database = None
     test_selection = None
@@ -430,11 +501,11 @@ if __name__ == "__main__":
     if INFERENCE:
         config['scheduler_kwargs'] = None
     else:
-        print("LOADING DATABASES:")
         (training_dataloader, validation_dataloader,train_dataset, val_dataset) = make_dataloaders(db=all_databases, 
                                                                                                    train_selection=train_selections,
                                                                                                    val_selection=val_selection,
                                                                                                    config=config)
+
 
         config['scheduler_kwargs'] = {
                         "milestones": [
@@ -448,7 +519,7 @@ if __name__ == "__main__":
         }
 
         callbacks = [
-            EarlyStopping(monitor='val_loss', patience=config['early_stopping_patience']),
+            #EarlyStopping(monitor='val_loss', patience=config['early_stopping_patience']),
             ProgressBar(),
             GradientAccumulationScheduler(scheduling=config['accumulate_grad_batches']),
             #LearningRateMonitor(logging_interval='step'),
@@ -462,7 +533,6 @@ if __name__ == "__main__":
                 every_n_epochs = 1,
                 save_weights_only=False))
 
-    print("Starting training")
     model = build_model(config)
     
     if not INFERENCE:
@@ -477,6 +547,7 @@ if __name__ == "__main__":
             if 'state_dict' in checkpoint:
                 checkpoint = checkpoint['state_dict']
             model.load_state_dict(checkpoint)
+            del checkpoint
         if validation_dataloader is not None:
             config['validation_dataloader'] = validation_dataloader
             
@@ -486,13 +557,12 @@ if __name__ == "__main__":
             callbacks=callbacks,
             **config['fit'],
         )
-        model.save(os.path.join(config['archive'], f"{run_name}.pth"))
-        model.save_state_dict(os.path.join(config['archive'], f"{run_name}_state_dict.pth"))
-        print(f"Model saved to {config['archive']}/{run_name}.pth")
+        #model.save(os.path.join(config['archive'], f"{run_name}.pth"))
+        #model.save_state_dict(os.path.join(config['archive'], f"{run_name}_state_dict.pth"))
+        #print(f"Model saved to {config['archive']}/{run_name}.pth")
     else:
 
         all_res = []
-        #checkpoint_path = (os.path.join(config['archive'], f"{run_name}_state_dict.pth"))
         checkpoint_path = f'/remote/ceph/user/l/llorente/tito_solution/model_graphnet/{MODEL}-last.pth'
 
         factor = 1

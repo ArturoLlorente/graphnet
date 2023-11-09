@@ -466,4 +466,3 @@ class sensitivity_plots:
             return ax, ax2
         else:
             return ax
-

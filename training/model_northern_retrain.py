@@ -93,75 +93,6 @@ class DistanceLoss2(LossFunction):
         cosLoss = torch.clamp(cosLoss, min=-1+eps, max=1-eps)
         thetaLoss = torch.arccos(cosLoss)
         return thetaLoss
-    
-from torch_geometric.data import Data, Batch
-
-class DynamicCollator:
-    def __init__(self, max_vram: int, max_n_pulses: int):
-        self.max_vram = max_vram
-        self.max_n_pulses = max_n_pulses
-
-    def __call__(self, graphs: List[Data]) -> List[Batch]:
-        # Filter out graphs with n_pulses <= 1 and sort by n_pulses
-        graphs = [g for g in graphs if g.n_pulses > 1]
-        graphs.sort(key=lambda x: x.n_pulses)
-        
-        batch_list = []
-        current_batch = []
-        current_batch_size = 0
-
-        for graph in graphs:
-            # Calculate the expected memory usage for the current graph
-            graph_memory = self.calculate_graph_memory_usage(graph)
-            
-            # If adding the current graph to the batch exceeds the VRAM limit or
-            # the batch size exceeds your desired limit based on n_pulses, create a new batch.
-            if current_batch_size + graph_memory > self.max_vram or len(current_batch) >= self.max_batch_size_for_n_pulses(graph.n_pulses):
-                if len(current_batch) > 0:
-                    batch = Batch.from_data_list(current_batch)
-                    batch_list.append(batch)
-                current_batch = []
-                current_batch_size = 0
-                
-            current_batch.append(graph)
-            current_batch_size += graph_memory
-
-        # Process the last batch
-        if len(current_batch) > 0:
-            batch = Batch.from_data_list(current_batch)
-            batch_list.append(batch)
-
-        return batch_list
-class DynamicCollator:
-    def __init__(self, max_vram: int):
-        self.max_vram = max_vram
-
-    def __call__(self, graphs: List[Data]) -> List[Batch]:
-        # Filter out graphs with n_pulses <= 1
-        graphs = [g for g in graphs if g.n_pulses > 1]
-        graphs.sort(key=lambda x: x.n_pulses)
-        batch_list = []
-        current_batch = []
-
-        for graph in graphs:
-            # Calculate VRAM usage for the current batch
-            current_batch.append(graph)
-            current_batch_size = len(current_batch) * graph.num_nodes  # You can adjust this based on your actual VRAM constraints
-            print("current batch size: ", current_batch_size)
-
-            if current_batch_size > self.max_vram:
-                if len(current_batch) > 0:
-                    batch = Batch.from_data_list(current_batch)
-                    batch_list.append(batch)
-                current_batch = [graph]
-        
-        # Process the last batch
-        if len(current_batch) > 0:
-            batch = Batch.from_data_list(current_batch)
-            batch_list.append(batch)
-
-        return batch_list
-
 
 use_global_features_all = {'model1': True, 'model2': True, 'model3': False, 'model4': True, 'model5': True, 'model6': True}
 use_post_processing_layers_all = {'model1': True, 'model2': True, 'model3': False, 'model4': True, 'model5': True, 'model6': True}
@@ -352,8 +283,6 @@ def inference(device: int,
     if 'state_dict' in checkpoint:
         checkpoint = checkpoint['state_dict']
     model.load_state_dict(checkpoint)
-
-
     event_nos ,zenith ,azimuth ,preds = [], [], [], []
     print('start predict')
     validateMode=True
@@ -393,11 +322,11 @@ def inference(device: int,
 if __name__ == "__main__":
 
     config = {
-        "archive": "/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23",
+        "archive": "/remote/ceph/user/l/llorente/tito_northern_retrain",
         "target": 'direction',
         "weight_column_name": None,
         "weight_table_name": None,
-        "batch_size": 2,
+        "batch_size": 256,
         "early_stopping_patience": 20,
         "num_workers": 64,
         "pulsemap": 'InIceDSTPulses',
@@ -405,10 +334,10 @@ if __name__ == "__main__":
         "index_column": 'event_no',
         "labels": {'direction': Direction()},
         "global_pooling_schemes": ["max"],
-        "accumulate_grad_batches": {0: 1},
-        "train_max_pulses": [12990, 13000],
-        "val_max_pulses": 500,
-        "num_database_files": 1,
+        "accumulate_grad_batches": {0: 4},
+        "train_max_pulses": 2020,
+        "val_max_pulses": 3000,
+        "num_database_files": 8,
         "node_truth_table": None,
         "node_truth": None,
         "string_selection": None,
@@ -421,11 +350,11 @@ if __name__ == "__main__":
         "features": ['dom_x', 'dom_y', 'dom_z', 'dom_time', 'charge', 'hlc'],
         "truth": TRUTH.ICECUBE86,
         "columns_nearest_neighbours": [0, 1, 2],
-        "collate_fn": collator_sequence_buckleting([1/2]),
+        "collate_fn": collator_sequence_buckleting([0.8]),
         "prediction_columns": ['dir_x_pred', 'dir_y_pred', 'dir_z_pred', 'dir_kappa_pred'],
         "fit": {
-            "max_epochs": 20,
-            "gpus": [2,3],
+            "max_epochs": 30,
+            "gpus": [0],
             "check_val_every_n_epoch": 1,
             "precision": '16-mixed',
         },
@@ -437,56 +366,43 @@ if __name__ == "__main__":
     MODEL = 'model5'
     INFERENCE = False
 
-
-    #ICECUBE86 = ["dom_x","dom_y","dom_z","dom_time","charge","hlc"]
-    #KAGGLE = ["x", "y", "z", "time", "charge", "auxiliary"]
-
+    config['retrain_from_checkpoint'] = None#f'/remote/ceph/user/l/llorente/tito_solution/model_graphnet/{MODEL}-last.pth'
+    
     config["use_global_features"] = use_global_features_all[MODEL]
     config["use_post_processing_layers"] = use_post_processing_layers_all[MODEL]
     config["dyntrans_layer_sizes"] = dyntrans_layer_sizes_all[MODEL]
     config["columns_nearest_neighbours"] = columns_nearest_neighbours_all[MODEL]
     config['additional_attributes'] = ['zenith', 'azimuth', config['index_column'], 'energy']
+    
     if len(config['fit']['gpus']) > 1:
         config['fit']['distribution_strategy'] = 'ddp'
 
-    #run_name = (f"{MODEL}_NEWTEST_dynedgeTITO_directionReco_{config['fit']['max_epochs']}e_trainMaxPulses{config['train_max_pulses'][0]}_"
-    #            f"trainMinPulses{config['train_max_pulses'][1]}_valMaxPulses{config['val_max_pulses']}_layerSize{len(config['dyntrans_layer_sizes'])}"
-    #            f"_useGG{config['use_global_features']}_usePP{config['use_post_processing_layers']}_batch{config['batch_size']}"
-    #            f"_numDatabaseFiles{config['num_database_files']}")
-    run_name = "dummy"
+    run_name = (f"{MODEL}_NEWTEST_dynedgeTITO_directionReco_{config['fit']['max_epochs']}e_trainMaxPulses{config['train_max_pulses']}_"
+                f"valMaxPulses{config['val_max_pulses']}_layerSize{len(config['dyntrans_layer_sizes'])}_useGG{config['use_global_features']}_"
+                f"usePP{config['use_post_processing_layers']}_batch{config['batch_size']}_numDatabaseFiles{config['num_database_files']}")
 
     # Configurations
     torch.multiprocessing.set_sharing_strategy('file_system')
     #torch.multiprocessing.set_start_method('spawn', force=True)
-    torch.set_float32_matmul_precision('high')
     
     db_dir = '/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/'
+    sel_dir = '/remote/ceph/user/l/llorente/northern_track_selection/'
     all_databases, all_selections = [], []
-    #test_idx = 5
-    #for idx in range(1,9):
-    #    if idx == test_idx: 
-    #        test_database = db_dir + f'dev_northern_tracks_muon_labels_v3_part_{idx}.db'
-    #        test_selection = pd.read_csv(f'/remote/ceph/user/l/llorente/northern_track_selection/part_{idx}.csv')
-    #    else:
-    #        all_databases.append(db_dir + f'dev_northern_tracks_muon_labels_v3_part_{idx}.db')
-    #        all_selections.append(pd.read_csv(f'/remote/ceph/user/l/llorente/northern_track_selection/part_{idx}.csv'))
-    ## get_list_of_databases:
-    #train_selections = []
-    #for selection in all_selections:
-    #    train_selections.append(selection.loc[selection['n_pulses'] < config['train_max_pulses'],:][config['index_column']].ravel().tolist())
-    #train_selections[-1] = train_selections[-1][:int(len(train_selections[-1])*0.9)]
-    #val_selection = selection.loc[(selection['n_pulses'] < config['val_max_pulses']),:][config['index_column']].ravel().tolist()
-    #val_selection = val_selection[int(len(val_selection)*0.9):]
-    
-    all_databases.append(db_dir + f'dev_northern_tracks_muon_labels_v3_part_1.db')
-    all_selections = pd.read_csv(f'/remote/ceph/user/l/llorente/northern_track_selection/part_1.csv')
-    train_selections = [all_selections.loc[
-                                (all_selections['n_pulses'] >= config['train_max_pulses'][0])&
-                                (all_selections['n_pulses'] < config['train_max_pulses'][1]),:
-                                ][config['index_column']].ravel().tolist()]
-    val_selection = None
-    test_database = None
-    test_selection = None
+    test_idx = 5
+    for idx in range(1,config['num_database_files']+1):
+        if idx == test_idx: 
+            test_database = db_dir + f'dev_northern_tracks_muon_labels_v3_part_{idx}.db'
+            test_selection = pd.read_csv(sel_dir + f'part_{idx}.csv')
+        else:
+            all_databases.append(db_dir + f'dev_northern_tracks_muon_labels_v3_part_{idx}.db')
+            all_selections.append(pd.read_csv(sel_dir + f'part_{idx}.csv'))
+    # get_list_of_databases:
+    train_selections = []
+    for selection in all_selections:
+        train_selections.append(selection.loc[selection['n_pulses'] < config['train_max_pulses'],:][config['index_column']].ravel().tolist())
+    train_selections[-1] = train_selections[-1][:int(len(train_selections[-1])*0.9)]
+    val_selection = selection.loc[(selection['n_pulses'] < config['val_max_pulses']),:][config['index_column']].ravel().tolist()
+    val_selection = val_selection[int(len(val_selection)*0.9):]
     
     config["graph_definition"] = KNNGraph(detector=config["detector"],
                                           node_definition=config["node_definition"],
@@ -501,7 +417,7 @@ if __name__ == "__main__":
     if INFERENCE:
         config['scheduler_kwargs'] = None
     else:
-        (training_dataloader, validation_dataloader,train_dataset, val_dataset) = make_dataloaders(db=all_databases, 
+        (training_dataloader, validation_dataloader, train_dataset, val_dataset) = make_dataloaders(db=all_databases, 
                                                                                                    train_selection=train_selections,
                                                                                                    val_selection=val_selection,
                                                                                                    config=config)
@@ -519,7 +435,7 @@ if __name__ == "__main__":
         }
 
         callbacks = [
-            #EarlyStopping(monitor='val_loss', patience=config['early_stopping_patience']),
+            EarlyStopping(monitor='val_loss', patience=config['early_stopping_patience']),
             ProgressBar(),
             GradientAccumulationScheduler(scheduling=config['accumulate_grad_batches']),
             #LearningRateMonitor(logging_interval='step'),
@@ -536,11 +452,9 @@ if __name__ == "__main__":
     model = build_model(config)
     
     if not INFERENCE:
-        
-        config['retrain_from_checkpoint'] = f'/remote/ceph/user/l/llorente/tito_solution/model_graphnet/{MODEL}-last.pth'
-        
         if config['resume_training_path']:
             config['fit']['resume_training_path'] = config['resume_training_path']
+            
         if config['retrain_from_checkpoint']:
             checkpoint_path = config['retrain_from_checkpoint']           
             checkpoint = torch.load(checkpoint_path, torch.device('cpu'))
@@ -549,17 +463,16 @@ if __name__ == "__main__":
             model.load_state_dict(checkpoint)
             del checkpoint
         if validation_dataloader is not None:
-            config['validation_dataloader'] = validation_dataloader
-            
-            
+            config['fit']['val_dataloader'] = validation_dataloader
+
         model.fit(
             training_dataloader,
             callbacks=callbacks,
             **config['fit'],
         )
-        #model.save(os.path.join(config['archive'], f"{run_name}.pth"))
-        #model.save_state_dict(os.path.join(config['archive'], f"{run_name}_state_dict.pth"))
-        #print(f"Model saved to {config['archive']}/{run_name}.pth")
+        model.save(os.path.join(config['archive'], f"{run_name}.pth"))
+        model.save_state_dict(os.path.join(config['archive'], f"{run_name}_state_dict.pth"))
+        print(f"Model saved to {config['archive']}/{run_name}.pth")
     else:
 
         all_res = []

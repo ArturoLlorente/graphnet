@@ -409,7 +409,7 @@ if __name__ == "__main__":
         "labels": {'direction': Direction()},
         "global_pooling_schemes": ["max"],
         "accumulate_grad_batches": {0: 1},
-        "train_max_pulses": [12980, 13000],
+        "train_max_pulses": [12975, 13000],
         "val_max_pulses": 500,
         "num_database_files": 1,
         "node_truth_table": None,
@@ -424,11 +424,11 @@ if __name__ == "__main__":
         "features": ['dom_x', 'dom_y', 'dom_z', 'dom_time', 'charge', 'hlc'],
         "truth": TRUTH.ICECUBE86,
         "columns_nearest_neighbours": [0, 1, 2],
-        "collate_fn": collate_fn, #collator_sequence_buckleting([1/2]),
+        "collate_fn": collator_sequence_buckleting([1/2]),
         "prediction_columns": ['dir_x_pred', 'dir_y_pred', 'dir_z_pred', 'dir_kappa_pred'],
         "fit": {
             "max_epochs": 20,
-            "gpus": [2,3],
+            "gpus": [3,2],
             "check_val_every_n_epoch": 1,
             "precision": '16-mixed',
         },
@@ -481,12 +481,16 @@ if __name__ == "__main__":
     #val_selection = selection.loc[(selection['n_pulses'] < config['val_max_pulses']),:][config['index_column']].ravel().tolist()
     #val_selection = val_selection[int(len(val_selection)*0.9):]
     
-    all_databases.append(db_dir + f'dev_northern_tracks_muon_labels_v3_part_1.db')
+    #all_databases.append(db_dir + f'dev_northern_tracks_muon_labels_v3_part_1.db')
     all_databases = ['/remote/ceph/user/l/llorente/northern_tracks_part5.db']
     all_selections = pd.read_csv(f'/remote/ceph/user/l/llorente/northern_track_selection/part_5.csv')
     train_selections = [all_selections.loc[
                                 (all_selections['n_pulses'] >= config['train_max_pulses'][0])&
                                 (all_selections['n_pulses'] < config['train_max_pulses'][1]),:
+                                ][config['index_column']].ravel().tolist()]
+    train_selections = [all_selections.loc[
+                                (all_selections['n_pulses'] == 12996)|
+                                (all_selections['event_no'] == 3029),:
                                 ][config['index_column']].ravel().tolist()]
     val_selection = None
     test_database = None
@@ -542,8 +546,8 @@ if __name__ == "__main__":
     
     if not INFERENCE:
         
-        #config['retrain_from_checkpoint'] = f'/remote/ceph/user/l/llorente/tito_solution/model_graphnet/{MODEL}-last.pth'
-        config['retrain_from_checkpoint'] = False
+        config['retrain_from_checkpoint'] = f'/remote/ceph/user/l/llorente/tito_solution/model_graphnet/{MODEL}-last.pth'
+        #config['retrain_from_checkpoint'] = False
         
         if config['resume_training_path']:
             config['fit']['resume_training_path'] = config['resume_training_path']
@@ -552,13 +556,13 @@ if __name__ == "__main__":
             checkpoint = torch.load(checkpoint_path, torch.device('cpu'))
             if 'state_dict' in checkpoint:
                 checkpoint = checkpoint['state_dict']
-            model.load_state_dict(checkpoint)
+            model.module.load_state_dict(checkpoint)
             del checkpoint
         if validation_dataloader is not None:
             config['validation_dataloader'] = validation_dataloader
             
             
-        model.fit(
+        model.module.fit(
             training_dataloader,
             callbacks=callbacks,
             **config['fit'],

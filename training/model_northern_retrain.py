@@ -1,15 +1,11 @@
 import os
-import numpy as np
 import pandas as pd
 from tqdm.auto import tqdm
-import sys
-
 import torch
 from torch.optim.adam import Adam
 
-from pytorch_lightning.callbacks import ModelCheckpoint, GradientAccumulationScheduler, LearningRateMonitor
+from pytorch_lightning.callbacks import ModelCheckpoint, GradientAccumulationScheduler, LearningRateMonitor, EarlyStopping
 from pytorch_lightning.loggers import WandbLogger 
-from pytorch_lightning.callbacks import EarlyStopping
 
 from graphnet.data.dataset import EnsembleDataset
 from graphnet.data.dataset import SQLiteDataset
@@ -360,10 +356,11 @@ if __name__ == "__main__":
         },
         "scheduler_class": PiecewiseLinearLR,
         "wandb": False,
-        "resume_training_path": None,
+        "ckpt_path": ('/remote/ceph/user/l/llorente/tito_northern_retrain/model_checkpoint_graphnet/'
+                      'model5_NEWTEST_dynedgeTITO_directionReco_30e_trainMaxPulses2020_valMaxPulses3000_layerSize4_useGGTrue_usePPTrue_batch256_numDatabaseFiles8-epoch=09-val_loss=-2.618189.ckpt'),
     }
     
-    MODEL = 'model5'
+    MODEL = 'model1'
     INFERENCE = False
 
     config['retrain_from_checkpoint'] = None#f'/remote/ceph/user/l/llorente/tito_solution/model_graphnet/{MODEL}-last.pth'
@@ -452,8 +449,8 @@ if __name__ == "__main__":
     model = build_model(config)
     
     if not INFERENCE:
-        if config['resume_training_path']:
-            config['fit']['resume_training_path'] = config['resume_training_path']
+        if config['ckpt_path']:
+            config['fit']['ckpt_path'] = config['ckpt_path']
             
         if config['retrain_from_checkpoint']:
             checkpoint_path = config['retrain_from_checkpoint']           

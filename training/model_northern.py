@@ -219,14 +219,14 @@ def inference(device: int,
                 ):
 
     test_path = '/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/dev_northern_tracks_muon_labels_v3_part_5.db'
-    test_selection_file = pd.read_csv('/home/iwsatlas1/oersoe/phd/northern_tracks/energy_reconstruction/selections/dev_northern_tracks_muon_labels_v3_part_5_regression_selection.csv')
+    test_selection_file = pd.read_csv('/remote/ceph/user/l/llorente/northern_track_selection/part_5.csv')
     test_selection = test_selection_file.loc[(test_selection_file['n_pulses']<=test_max_pulses) & (test_selection_file['n_pulses']>test_min_pulses),:]['event_no'].ravel().tolist()
 
     test_dataloader =  make_dataloader(db = test_path,
                                         selection = test_selection,
                                         graph_definition = graph_definition,
                                         pulsemaps = 'InIceDSTPulses',
-                                        num_workers = 16,
+                                        num_workers = 8,
                                         features = FEATURES.ICECUBE86,
                                         shuffle = False,
                                         truth = TRUTH.ICECUBE86,
@@ -315,12 +315,12 @@ if __name__ == "__main__":
     val_max_pulses = 1000
     scheduler_class = PiecewiseLinearLR
     wandb = False
-    INFERENCE = False
+    INFERENCE = True
     ## Diferent models
 
     #resume_training_path = False
-    resume_training_path = '/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23/model_checkpoint_graphnet/model3_NEWTEST_dynedgeTITO_directionReco_50e_trainMaxPulses1000_valMaxPulses1000_layerSize3_useGGFalse_usePPFalse_batch350_numDatabaseFiles4_accGradBatch2-epoch=19-val_loss=-2.650039.ckpt'
-    MODEL = 'model3'
+    #resume_training_path = '/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23/model_checkpoint_graphnet/model3_NEWTEST_dynedgeTITO_directionReco_50e_trainMaxPulses1000_valMaxPulses1000_layerSize3_useGGFalse_usePPFalse_batch350_numDatabaseFiles4_accGradBatch2-epoch=19-val_loss=-2.650039.ckpt'
+    MODEL = 'model1'
     use_global_features = use_global_features_all[MODEL]
     use_post_processing_layers = use_post_processing_layers_all[MODEL]
     dyntrans_layer_sizes = dyntrans_layer_sizes_all[MODEL]
@@ -464,11 +464,11 @@ if __name__ == "__main__":
         
         all_res = []
         #checkpoint_path = (os.path.join(archive, f"{run_name}_state_dict.pth"))
-        checkpoint_path = '/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23/model_checkpoint_graphnet/model6_NEWTEST_dynedgeTITO_directionReco_50e_trainMaxPulses1000_valMaxPulses1000_layerSize4_useGGTrue_usePPTrue_batch256_numDatabaseFiles4_accGradBatch2-epoch=32-val_loss=-2.678860.ckpt'
+        checkpoint_path = '/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23/model1_NEWTEST_dynedgeTITO_directionReco_50e_trainMaxPulses1000_valMaxPulses1000_layerSize4_useGGTrue_usePPTrue_batch256_numDatabaseFiles4_accGradBatch2_state_dict.pth'
 
-        factor = 1/3
+        factor = 1
         pulse_breakpoints = [0, 500, 1000, 1500, 2000, 3000]*factor
-        batch_sizes_per_pulse = [1750, 150, 25, 15, 5]
+        batch_sizes_per_pulse = [1750, 150, 40, 11, 4]
         
         for min_pulse, max_pulse in zip(pulse_breakpoints[:-1], pulse_breakpoints[1:]):
             print(f'predicting {min_pulse} to {max_pulse} pulses with batch size {batch_sizes_per_pulse[pulse_breakpoints.index(max_pulse)-1]}')
@@ -489,10 +489,8 @@ if __name__ == "__main__":
             del results
             torch.cuda.empty_cache()
 
-        results = pd.concat(all_res).sort_values('event_no')
-
-
-        run_name_pred = f'{MODEL}_CHECKPOINT_northern_tracks'
-        path_to_save = '/remote/ceph/user/l/llorente/train_DynEdgeTITO_northern_Oct23/prediction_models'
-        results.to_csv(f"{path_to_save}/{run_name_pred}_graphnet.csv")
-        print(f'predicted and saved in {path_to_save}/{run_name_pred}_graphnet.csv')
+        results = pd.concat(all_res).sort_values(config['index_column'])
+        run_name_pred = f'{MODEL}_retrain_northern'
+        path_to_save = '/remote/ceph/user/l/llorente/tito_northern_retrain'
+        results.to_csv(f"{path_to_save}/{run_name_pred}.csv")
+        print(f'predicted and saved in {path_to_save}/{run_name_pred}.csv')

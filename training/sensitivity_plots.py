@@ -3,11 +3,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 import sqlite3
 from copy import deepcopy
+from typing import Union, List
+import warnings
 
-class sensitivity_plots:
-
+class sensitivity_plots_jupyter:
     def __init__(self, 
-                 df_original: pd.DataFrame, 
+                 df_original: Union[pd.DataFrame, List[pd.DataFrame]], 
+                 df_labels: Union[str, List[str]],
                  db: str,
                  pulsemaps:str = 'InIceDSTPulses',
                  index_column: str = 'event_no',
@@ -15,9 +17,10 @@ class sensitivity_plots:
                  y_pred_label: str = 'direction_y',
                  z_pred_label: str = 'direction_z',
                  truth_table = 'truth'):
-        
-        if not isinstance(df_original, pd.DataFrame):
-            raise TypeError('df_original must be a pandas DataFrame')
+        if isinstance(df_original, pd.DataFrame):
+            df_original = [df_original]
+        if not isinstance(df_original, list):
+            raise TypeError('df_original must be a pandas DataFrame or a list of DataFrames')
         if not isinstance(db, str):
             raise TypeError('database must be a string')
         
@@ -29,46 +32,66 @@ class sensitivity_plots:
         self.y_pred_label = y_pred_label
         self.z_pred_label = z_pred_label
         self.truth_table = truth_table
-
-    def _add_energy(self, original_df, db):
+        self.df_labels = df_labels
+       
+    def _add_energy(self, original_df: List[pd.DataFrame]):
         df = deepcopy(original_df)
-        df = df.sort_values(self.index_column).reset_index(drop = True)
-        with sqlite3.connect(db) as con:
-            query = f'select {self.index_column}, energy from {self.truth_table} where {self.index_column} in {str(tuple(df[self.index_column]))}'
-            truth = pd.read_sql(query,con).sort_values(self.index_column).reset_index(drop = True)
+        df = [df_i.sort_values(self.index_column).reset_index(drop = True) for df_i in df]
         
-        for column in truth.columns:
-            if column not in df.columns:
-                df[column] = truth[column]
+        if all((df_i[self.index_column] == df[0][self.index_column]).all() for df_i in df[1:]):
+            with sqlite3.connect(self.db) as con:
+                query = f'select {self.index_column}, energy from {self.truth_table} where {self.index_column} in {str(tuple(df[0][self.index_column]))}'
+                truth = pd.read_sql(query,con).sort_values(self.index_column).reset_index(drop = True)
+        else:
+            warnings.warn('The DataFrames do not have the same index', UserWarning)
+            for idx, df_i in enumerate(df):
+                with sqlite3.connect(self.db) as con:
+                    query = f'select {self.index_column}, energy from {self.truth_table} where {self.index_column} in {str(tuple(df_i[self.index_column]))}'
+                    truth = pd.read_sql(query,con).sort_values(self.index_column).reset_index(drop = True)
+                    
+        for idx, df_i in enumerate(df):
+            for column in truth.columns:
+                if column not in df_i.columns:
+                    df[idx][column] = truth[column]
+        return df
+    
+    def _add_track_label(self, original_df: List[pd.DataFrame]):
+        df = deepcopy(original_df)
+        df = [df_i.sort_values(self.index_column).reset_index(drop = True) for df_i in df]
+        
+        if all((df_i[self.index_column] == df[0][self.index_column]).all() for df_i in df[1:]):
+            with sqlite3.connect(self.db) as con:
+                query = f'select {self.index_column}, interaction_type, pid from {self.truth_table} where {self.index_column} in {str(tuple(df[0][self.index_column]))}'
+                truth = pd.read_sql(query,con).sort_values(self.index_column).reset_index(drop = True)
+                truth['track'] = 0
+                truth.loc[(truth['interaction_type'] == 1) & (abs(truth['pid']) == 14), 'track'] = 1
+        else:
+            warnings.warn('The DataFrames do not have the same index', UserWarning)
+            for idx, df_i in enumerate(df):
+                with sqlite3.connect(self.db) as con:
+                    query = f'select {self.index_column}, interaction_type, pid from {self.truth_table} where {self.index_column} in {str(tuple(df_i[self.index_column]))}'
+                    truth = pd.read_sql(query,con).sort_values(self.index_column).reset_index(drop = True)
+                    truth['track'] = 0
+                    truth.loc[(truth['interaction_type'] == 1) & (abs(truth['pid']) == 14), 'track'] = 1
+                            
+        for idx, df_i in enumerate(df):
+            for column in truth.columns:
+                if column not in df_i.columns:
+                    df[idx][column] = truth[column]
+        
         return df
 
-    def _add_track_label(self, original_df, db):
+    def _add_spline_fit(self, original_df: pd.DataFrame):
         df = deepcopy(original_df)
         df = df.sort_values(self.index_column).reset_index(drop = True)
-        with sqlite3.connect(db) as con:
-            query = f'select {self.index_column}, interaction_type, pid from {self.truth_table} where {self.index_column} in {str(tuple(df[self.index_column]))}'
-            truth = pd.read_sql(query,con).sort_values(self.index_column).reset_index(drop = True)
-        
-        truth['track'] = 0
-        truth.loc[(truth['interaction_type'] == 1) & (abs(truth['pid']) == 14), 'track'] = 1
-
-        for column in truth.columns:
-            if column not in df.columns:
-                df[column] = truth[column]
-        return df
-
-    def _add_spline_fit(self, original_df, db):
-        df = deepcopy(original_df)
-        df = df.sort_values(self.index_column).reset_index(drop = True)
-        with sqlite3.connect(db) as con:
+        with sqlite3.connect(self.db) as con:
             # Read the table data into a Pandas DataFrame
             query = f'SELECT {self.index_column}, zenith_spline_mpe_ic, azimuth_spline_mpe_ic from spline_mpe_ic where {self.index_column} in {str(tuple(df[self.index_column]))}'
             truth = pd.read_sql(query,con).sort_values(self.index_column).reset_index(drop = True)
-        
-        # Add the spline fit to the DataFrame
-        for column in truth.columns:
-            if column not in df.columns:
-                df[column] = truth[column]    
+            # Add the spline fit to the DataFrame
+            for column in truth.columns:
+                if column not in df.columns:
+                    df[column] = truth[column]    
         return df
         
     def _add_prediction_azimuth_zenith(self, original_df):
@@ -87,14 +110,27 @@ class sensitivity_plots:
         return df
 
 
-    def _calculate_percentiles(self, residual, index = None):
+    def _calculate_percentiles(self, percentile_calculations_original, residual, key1, key2, index = None):
+        percentile_calculations = deepcopy(percentile_calculations_original)
         if index is None:
-            return np.percentile(residual, 16),np.percentile(residual, 84), np.percentile(residual[index], 50)
+            percentile_calculations[key1][key2]['p_16'].append(np.percentile(residual, 16))
+            percentile_calculations[key1][key2]['p_84'].append(np.percentile(residual, 84))
+            if self.include_median:
+                percentile_calculations[key1][key2]['p_50'].append(np.percentile(residual, 50))
+            return percentile_calculations
         else:
             if sum(index)>0:
-                return np.percentile(residual[index], 16),np.percentile(residual[index], 84), np.percentile(residual[index], 50)
+                percentile_calculations[key1][key2]['p_16'].append(np.percentile(residual[index], 16))
+                percentile_calculations[key1][key2]['p_84'].append(np.percentile(residual[index], 84))
+                if self.include_median:
+                    percentile_calculations[key1][key2]['p_50'].append(np.percentile(residual[index], 50))
+                return percentile_calculations
             else:
-                return np.nan, np.nan, np.nan
+                percentile_calculations[key1][key2]['p_16'].append(np.nan)
+                percentile_calculations[key1][key2]['p_84'].append(np.nan)
+                if self.include_median:
+                    percentile_calculations[key1][key2]['p_50'].append(np.nan)
+                return percentile_calculations
 
     def _calculate_opening_angle(self, df, key = 'gnn'):
         x = np.cos(df['azimuth']) * np.sin(df['zenith'])
@@ -199,39 +235,45 @@ class sensitivity_plots:
         #fig.savefig(f'2d_correlation_performance{key}.pdf')
         #fig.savefig(f'2d_correlation_performance{key}.png')
     def plot_resolution_fancy(self, 
-                            key,
-                            pulse_count_threshold = 8, 
-                            include_median = True, 
-                            include_energy_hist = False,
-                            step = True,
-                            include_residual_hist = False,
-                            font_size =10, 
-                            text_loc = 'center',
-                            ncols = 1,
-                            legend_bbox = None, 
-                            cascades_in_dataset = False,
-                            compare_spline = True):
-        #font_size = 15
-        df = self.df_original
-        plotting_colours = ['tab:blue', 'tab:orange', 'tab:green', 'tab:red']
-        track_colour = plotting_colours[0]
+                            key: str = 'direction',
+                            include_median: bool = True, 
+                            include_energy_hist: bool = False,
+                            step: bool = True,
+                            include_residual_hist:bool = False,
+                            font_size: int = 10, 
+                            ncols: int = 1,
+                            legend_bbox: bool = None, 
+                            cascades_in_dataset: bool = False,
+                            compare_spline: bool = True):
+
+        df = deepcopy(self.df_original)
+        df.insert(0, df[-1])
+        df_labels_plotting = deepcopy(self.df_labels)
+        df_labels_plotting.insert(0, 'SplineMPE')
+        self.include_median = include_median
+        
+        n_lines = (len(df) + int(compare_spline)+1)*(int(cascades_in_dataset)+1)
+        plotting_colours = ['tab:orange', 'tab:blue', 'tab:green', 'tab:red', 'tab:purple', 'tab:brown', 'tab:pink', 'tab:gray', 'tab:olive', 'tab:cyan']
+        track_index = [i for i in range(len(df))]
+        track_colour = [plotting_colours[i % len(plotting_colours)] for i in track_index]
+        cascade_index = [len(df)+i+1 for i in range(len(df))]
+        cascade_colour = [plotting_colours[i % len(plotting_colours)] for i in cascade_index]
+        all_colour = {'track': track_colour, 'cascade': cascade_colour}
+        
+        percentiles = ['p_16', 'p_84']
+        if include_median:
+            percentiles.append('p_50')
+        percentile_calculations = {'tracks': {f'{df_labels_plotting[i]}': {percentile: [] for percentile in percentiles+['mean']} for i in range(len(df))}}
         if cascades_in_dataset:
-            cascade_colour = plotting_colours[1]
-            if compare_spline:
-                track_spline_colour = plotting_colours[2]
-                cascade_spline_colour = plotting_colours[3]
-        else:
-            if compare_spline:
-                track_spline_colour = plotting_colours[1]
-            
+            percentile_calculations['cascades'] = {f'{df_labels_plotting[i]}': {percentile: [] for percentile in percentiles+['mean']} for i in range(len(df))}
         
         fig = plt.figure(figsize = (5,3.5), constrained_layout = True)
         if include_energy_hist:
             gs = fig.add_gridspec(10, 10)
                             #left=0.1, right=0.9, bottom=0.1, top=0.9,
                             #wspace=0.05, hspace=0.01)
-            ax = fig.add_subplot(gs[2:, :-4])
-            ax_histx = fig.add_subplot(gs[0:2, :-4], sharex=ax)
+            ax = fig.add_subplot(gs[2:, :])
+            ax_histx = fig.add_subplot(gs[0:2, :], sharex=ax)
             ax2 = fig.add_subplot(gs[2:10, 6:])
         elif include_residual_hist:
             gs = fig.add_gridspec(8, 10)
@@ -242,186 +284,114 @@ class sensitivity_plots:
             ax2 = fig.add_subplot(gs[0:8, 6:])
         else:
             gs = fig.add_gridspec(8, 6)
-                            #left=0.1, right=0.9, bottom=0.1, top=0.9,
-                            #wspace=0.05, hspace=0.01)
             ax = fig.add_subplot(gs[0:, :6])
             ax_histx = None
             ax2 = None
-            ax.plot(np.nan, np.nan, color = track_colour, label = 'Tracks (GNN)')
-            if compare_spline:
-                ax.plot(np.nan, np.nan, color = track_spline_colour, label = 'Tracks (SplineMPE)')
+            for i in range(len(df)):
+                ax.plot(np.nan, np.nan, color = all_colour['track'][i], label = f'Tracks {df_labels_plotting[i]}')
+                ax.plot(np.nan, np.nan, color = all_colour['cascade'][i], label = f'Cascades {df_labels_plotting[i]}')
+            
+            
+        for i in range(len(df)):
+            percentile_calculations['tracks'][df_labels_plotting[i]]['colour'] = all_colour['track'][i]
             if cascades_in_dataset:
-                ax.plot(np.nan, np.nan, color = cascade_colour, label = 'Cascades (GNN)')
-                if compare_spline:
-                    ax.plot(np.nan, np.nan, color = cascade_spline_colour, label = 'Cascades (SplineMPE)')
+                percentile_calculations['cascades'][df_labels_plotting[i]]['colour'] = all_colour['cascade'][i]
+        
+             
 
-        if 'energy' not in df.columns:
-            df = self._add_energy(df, self.db)
-        if 'track' not in df.columns:
-            df = self._add_track_label(df, self.db)
-        if 'zenith_pred' not in df.columns:
-            df = self._add_prediction_azimuth_zenith(df)
+        df = self._add_energy(df)
+        df = self._add_track_label(df)
+        df = [self._add_prediction_azimuth_zenith(df_i) if ('zenith_pred' not in df_i.columns) else df_i for df_i in df]
         if compare_spline:
-            if 'zenith_spline_mpe_ic' not in df.columns:
-                df = self._add_spline_fit(df, self.db)
+            df[0] = self._add_spline_fit(df[0])
         
         energy_bins = []# , np.arange(0,3.1,0.05)
         for percentile in np.arange(0,105,5):
-            energy_bins.append(np.percentile(np.log10(df['energy']), percentile))
-        mean_energy_track = []
-        mean_energy_cascade = []
-        mean_energy_track_spline = []
-        mean_energy_cascade_spline = []
-        
-        p_16 = {'track': [],
-                'cascade': []}
-        p_84 = {'track': [],
-                'cascade': []}
-        p_50 = {'track': [],
-                'cascade': []}
-        if compare_spline:
-            p_16['track_splinempe'] = []
-            p_84['track_splinempe'] = []
-            p_50['track_splinempe'] = []
-            p_16['cascade_splinempe'] = []
-            p_84['cascade_splinempe'] = []
-            p_50['cascade_splinempe'] = []
+            energy_bins.append(np.percentile(np.log10(df[0]['energy']), percentile))
 
-        if key == 'energy':
-            residual = ((df['energy'] - df['energy_pred'])/df['energy']) * 100
-            key_bins = np.arange(-300,100, 5)
-            if ax2 is not None:
-                ax2.set_xlabel('$\\frac{Truth - Reco.}{Truth}$[%]', size = font_size)
-            ax.set_ylabel('Energy Resolution [%]', size = font_size)
-        elif key == 'zenith':
-            residual = np.rad2deg(df['zenith'] - df['zenith_pred'])
-            if compare_spline:
-                residual_spline = np.rad2deg(df['zenith'] - df['zenith_spline_mpe_ic'])
-            key_bins = np.arange(-90, 90, 1)
-            if ax2 is not None:
-                ax2.set_xlabel('Truth - Reco. [deg.]', size = font_size)
-            ax.set_ylabel('Zenith Resolution [deg.]', size = font_size)
-        elif key == 'direction':
-            residual = self._calculate_opening_angle(df, key = 'gnn')
-            if compare_spline:
-                residual_spline = self._calculate_opening_angle(df, key = 'spline')
-            key_bins = np.arange(0, 120, 1)
-            if ax2 is not None:
-                ax2.set_xlabel('Opening Angle [deg.]', size = font_size)
-            ax.set_ylabel('Opening Angle [deg.]', size = font_size)
-        else:
-            assert False, "key must be 'energy', 'zenith' or 'direction'"
+        # Calculate the residuals and bins
+        residual = {}
+        keys_df = list(percentile_calculations['tracks'].keys())
+        for idx, df_i in enumerate(df):
+            key_df = keys_df[idx]
+            if key == 'energy':
+                if not (compare_spline and idx == 0):
+                    residual[key_df] = ((df_i['energy'] - df_i['energy_pred'])/df_i['energy']) * 100
+                    key_bins = np.arange(-300,100, 5)
+                    if ax2 is not None:
+                        ax2.set_xlabel('$\\frac{Truth - Reco.}{Truth}$[%]', size = font_size)
+                    ax.set_ylabel('Energy Resolution [%]', size = font_size)
+            elif key == 'zenith':
+                if compare_spline and idx == 0:
+                    residual['SplineMPE'] = (np.rad2deg(df_i['zenith'] - df_i['zenith_spline_mpe_ic']))
+                else:
+                    residual[key_df] = np.rad2deg(df_i['zenith'] - df_i['zenith_pred'])
+                key_bins = np.arange(-90, 90, 1)
+                if ax2 is not None:
+                    ax2.set_xlabel('Truth - Reco. [deg.]', size = font_size)
+                ax.set_ylabel('Zenith Resolution [deg.]', size = font_size)
+            elif key == 'azimuth':
+                if compare_spline and idx == 0:
+                    residual['SplineMPE'] = (np.rad2deg(df_i['azimuth'] - df_i['azimuth_spline_mpe_ic']))
+                else:
+                    residual[key_df] = np.rad2deg(df_i['azimuth'] - df_i['azimuth_pred'])
+                key_bins = np.arange(-90, 90, 1)
+                if ax2 is not None:
+                    ax2.set_xlabel('Truth - Reco. [deg.]', size = font_size)
+                ax.set_ylabel('Zenith Resolution [deg.]', size = font_size)
+            elif key == 'direction':
+                if compare_spline and idx == 0:
+                    residual['SplineMPE'] = self._calculate_opening_angle(df_i, key = 'spline')
+                else:
+                    residual[key_df] = self._calculate_opening_angle(df_i, key = 'gnn')
+                key_bins = np.arange(0, 120, 1)
+                if ax2 is not None:
+                    ax2.set_xlabel('Opening Angle [deg.]', size = font_size)
+                ax.set_ylabel('Opening Angle [deg.]', size = font_size)
+            else:
+                assert False, "key must be 'energy', 'zenith', 'azimuth' or 'direction'"
 
-        for i in range(len(energy_bins) - 1):
-            index_energy = (np.log10(df['energy'])>= energy_bins[i]) & (np.log10(df['energy'])<energy_bins[i+1])
-            index_track = df['track'][index_energy] == 1
-            if cascades_in_dataset:
-                index_cascade = df['track'][index_energy] == 0
-            
-            p_16_track, p_84_track, p_50_track = self._calculate_percentiles(residual[index_energy], index = index_track)
-            mean_energy_track.append(np.log10(df['energy'][index_energy][index_track]).mean())
-            p_16['track'].append(p_16_track)
-            p_84['track'].append(p_84_track)
-            p_50['track'].append(p_50_track)
-            
-            if cascades_in_dataset:
-                p_16_cascade, p_84_cascade, p_50_cascade = self._calculate_percentiles(residual[index_energy], index = index_cascade)
-                mean_energy_cascade.append(np.log10(df['energy'][index_energy][index_cascade]).mean())
-                p_16['cascade'].append(p_16_cascade)
-                p_84['cascade'].append(p_84_cascade)
-                p_50['cascade'].append(p_50_cascade)
-                
-            if compare_spline:
-                p_16_track_spline, p_84_track_spline, p_50_track_spline = self._calculate_percentiles(residual_spline[index_energy], index = index_track)
-                p_16['track_splinempe'].append(p_16_track_spline)
-                p_84['track_splinempe'].append(p_84_track_spline)
-                p_50['track_splinempe'].append(p_50_track_spline)
-                if cascades_in_dataset:
-                    p_16_cascade_spline, p_84_cascade_spline, p_50_cascade_spline = self._calculate_percentiles(residual_spline[index_energy], index = index_cascade)
-                    p_16['cascade_splinempe'].append(p_16_cascade_spline)
-                    p_84['cascade_splinempe'].append(p_84_cascade_spline)
-                    p_50['cascade_splinempe'].append(p_50_cascade_spline)
-            
-        p_16['track'] = np.array(p_16['track'])
-        p_84['track'] = np.array(p_84['track'])
-        p_50['track'] = np.array(p_50['track'])
-        mean_energy_track = np.array(mean_energy_track)
-        if cascades_in_dataset:
-            p_16['cascade'] = np.array(p_16['cascade'])
-            p_84['cascade'] = np.array(p_84['cascade'])
-            p_50['cascade'] = np.array(p_50['cascade'])
-            mean_energy_cascade = np.array(mean_energy_cascade)
-            
-        if compare_spline:
-            p_16['track_splinempe'] = np.array(p_16['track_splinempe'])
-            p_84['track_splinempe'] = np.array(p_84['track_splinempe'])
-            p_50['track_splinempe'] = np.array(p_50['track_splinempe'])
-            mean_energy_track_spline = np.array(mean_energy_track)
-            if cascades_in_dataset:
-                p_16['cascade_splinempe'] = np.array(p_16['cascade_splinempe'])
-                p_84['cascade_splinempe'] = np.array(p_84['cascade_splinempe'])
-                p_50['cascade_splinempe'] = np.array(p_50['cascade_splinempe'])
-                mean_energy_cascade_spline = np.array(mean_energy_cascade)
+        for idx, df_i in enumerate(df):
+            for i in range(len(energy_bins) - 1):
+                index_energy = (np.log10(df_i['energy'])>= energy_bins[i]) & (np.log10(df_i['energy'])<energy_bins[i+1])                    
+                for event_type in percentile_calculations.keys():
+                    index = np.where(event_type == 'tracks', df_i['track'][index_energy] == 1, df_i['track'][index_energy] == 0)
+                    percentile_calculations = self._calculate_percentiles(percentile_calculations, residual[df_labels_plotting[idx]][index_energy], event_type, df_labels_plotting[idx], index = index)
+                    percentile_calculations[event_type][df_labels_plotting[idx]]['mean'].append(np.log10(df_i['energy'][index_energy][index]).mean())               
         
-        if step:
-            ax.step(10**mean_energy_track, p_16['track'], label = None, ls = '--', color = track_colour, where = 'mid')
-            ax.step(10**mean_energy_track, p_84['track'], label = None, ls = '--', color = track_colour, where = 'mid')
-            if cascades_in_dataset:
-                ax.step(10**mean_energy_cascade, p_16['cascade'], label = None, ls = '--', color = cascade_colour, where = 'mid')
-                ax.step(10**mean_energy_cascade, p_84['cascade'], label = None, ls = '--', color = cascade_colour, where = 'mid')
-            if compare_spline:
-                ax.step(10**mean_energy_track_spline, p_16['track_splinempe'], label = None, ls = '--', color = track_spline_colour, where = 'mid')
-                ax.step(10**mean_energy_track_spline, p_84['track_splinempe'], label = None, ls = '--', color = track_spline_colour, where = 'mid')
-                if cascades_in_dataset:
-                    ax.step(10**mean_energy_cascade_spline, p_16['cascade_splinempe'], label = None, ls = '--', color = cascade_spline_colour, where = 'mid')
-                    ax.step(10**mean_energy_cascade_spline, p_84['cascade_splinempe'], label = None, ls = '--', color = cascade_spline_colour, where = 'mid')
-            if include_median:
-                ax.step(10**mean_energy_track, p_50['track'], label = None, ls = '-', color = track_colour, where = 'mid')
-                if cascades_in_dataset:
-                    ax.step(10**mean_energy_cascade, p_50['cascade'], label = None, ls = '-', color = cascade_colour, where = 'mid')
-                if compare_spline:
-                    ax.step(10**mean_energy_track_spline, p_50['track_splinempe'], label = None, ls = '-', color = track_spline_colour, where = 'mid')
-                    if cascades_in_dataset:
-                        ax.step(10**mean_energy_cascade_spline, p_50['cascade_splinempe'], label = None, ls = '-', color = cascade_spline_colour, where = 'mid')
-        
-        else:
-            ax.plot(10**mean_energy_track, p_16['track'], label = None, ls = '--', color = track_colour)
-            ax.plot(10**mean_energy_track, p_84['track'], label = None, ls = '-', color = track_colour)
-            if cascades_in_dataset:
-                ax.plot(10**mean_energy_cascade, p_16['cascade'], label = None, ls = '--', color = cascade_colour)
-                ax.plot(10**mean_energy_cascade, p_84['cascade'], label = None, ls = '-', color = cascade_colour)
-            if compare_spline:
-                ax.plot(10**mean_energy_track_spline, p_16['track_splinempe'], label = None, ls = '--', color = track_spline_colour)
-                ax.plot(10**mean_energy_track_spline, p_84['track_splinempe'], label = None, ls = '-', color = track_spline_colour)
-                if cascades_in_dataset:
-                    ax.plot(10**mean_energy_cascade_spline, p_16['cascade_splinempe'], label = None, ls = '--', color = cascade_spline_colour)
-                    ax.plot(10**mean_energy_cascade_spline, p_84['cascade_splinempe'], label = None, ls = '-', color = cascade_spline_colour)
-            if include_median:
-                ax.plot(10**mean_energy_track, p_50['track'], label = None, ls = '-', color = track_colour)
-                if cascades_in_dataset:
-                    ax.plot(10**mean_energy_cascade, p_50['cascade'], label = None, ls = '-', color = cascade_colour)
-                if compare_spline:
-                    ax.plot(10**mean_energy_track_spline, p_50['track_splinempe'], label = None, ls = '-', color = track_spline_colour)
-                    if cascades_in_dataset:
-                        ax.plot(10**mean_energy_cascade_spline, p_50['cascade_splinempe'], label = None, ls = '-', color = cascade_spline_colour)
-            
+        for event_type in list(percentile_calculations.keys()):
+            for pred_name in list(percentile_calculations[event_type].keys()):
+                for percentile in percentiles+['mean']:
+                    percentile_calculations[event_type][pred_name][percentile] = np.array(percentile_calculations[event_type][pred_name][percentile])
+                    
+                    
+                    
+        for event_type in list(percentile_calculations.keys()):
+            for pred_name in list(percentile_calculations[event_type].keys()):
+                for percentile in percentiles:
+                    ls = '-' if percentile == 'p_50' else '--'
+                    if step:
+                        ax.step(10**percentile_calculations[event_type][pred_name]['mean'], percentile_calculations[event_type][pred_name][percentile], label=None, ls=ls, color=percentile_calculations[event_type][pred_name]['colour'], where='mid')
+                    else:
+                        ax.plot(10**percentile_calculations[event_type][pred_name]['mean'], percentile_calculations[event_type][pred_name][percentile], label=None, ls=ls, color=percentile_calculations[event_type][pred_name]['colour'])
+
         ax.plot(np.nan, np.nan, label = '84th', ls = '--', color = 'grey')
         if include_median:
             ax.plot(np.nan, np.nan, label = 'Median', ls = '-', color = 'grey')
-        #ax.plot(np.nan, np.nan, label = 'Central 68%', ls = '--', color = 'grey')
         
         if include_energy_hist:
-            ax_histx.hist(np.log10(df['energy'][df['track'] == 1]), histtype = 'step', color = track_colour, bins = energy_bins)
-            if compare_spline:
-                ax_histx.hist(np.log10(df['energy'][df['track'] == 1]), histtype = 'step', color = track_spline_colour, bins = energy_bins)  
-            if cascades_in_dataset:
-                ax_histx.hist(np.log10(df['energy'][df['track'] == 0]), histtype = 'step', color = cascade_colour, bins = energy_bins)
-                if compare_spline:
-                    ax_histx.hist(np.log10(df['energy'][df['track'] == 0]), histtype = 'step', color = cascade_spline_colour, bins = energy_bins)
+            for idx, df_i in enumerate(df):
+                ax_histx.hist(np.log10(df_i['energy'][df_i['track'] == 1]), histtype = 'step', color = track_colour[idx], bins = energy_bins)
 
         ax.legend(frameon = False, fontsize = font_size, ncol = ncols, bbox_to_anchor=legend_bbox)
         ax.set_xlabel('True Energy [GeV]', size = font_size)
         if ax2 is not None:
+            for idx, df_i in enumerate(df):
+                key_df = keys_df[idx]
+                ax2.hist(residual[df['track'] == 1], histtype = 'step', bins = key_bins, label = 'Tracks')
+                
+                
+                
             ax2.hist(residual[df['track'] == 1], histtype = 'step', bins = key_bins, label = 'Tracks')
             if cascades_in_dataset:
                 ax2.hist(residual[df['track'] == 0], histtype = 'step', bins = key_bins, label = 'Cascades')
@@ -430,7 +400,7 @@ class sensitivity_plots:
                 if cascades_in_dataset:
                     ax2.hist(residual[df['track'] == 0], histtype = 'step', bins = key_bins, label = 'Cascades (SplineMPE)')
         
-        if key in ['energy', 'zenith']:
+        if key in ['energy', 'zenith', 'azimuth']:
             if ax2 is not None:
                 ax2.legend(frameon = False, fontsize = font_size, loc = 'upper left')
         else:
@@ -461,7 +431,6 @@ class sensitivity_plots:
         plt.rcParams['legend.fontsize'] = 10
         #plt.text(x = text_loc[0], y = text_loc[1], s = "IceCube Simulation", fontsize = 12)
         #fig.savefig(f'{key}_reco.pdf')
-        fig.savefig(f'{key}_reco.png')
         if ax2 is not None:
             return ax, ax2
         else:

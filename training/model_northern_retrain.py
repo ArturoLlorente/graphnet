@@ -417,7 +417,7 @@ if __name__ == "__main__":
         "accumulate_grad_batches": {0: 3},
         "train_max_pulses": 2020,
         "val_max_pulses": 3000,
-        "num_database_files": 8,
+        "num_database_files": 1,
         "node_truth_table": None,
         "node_truth": None,
         "string_selection": None,
@@ -439,7 +439,7 @@ if __name__ == "__main__":
         ],
         "fit": {
             "max_epochs": 500,
-            "gpus": [2],
+            "gpus": [1],
             "check_val_every_n_epoch": 1,
             "precision": "16-mixed",
         },
@@ -448,13 +448,13 @@ if __name__ == "__main__":
         "scheduler_kwargs": {"mode": "min", "patience": 5, "verbose": True},
         "scheduler_config": {"frequency": 1, "monitor": "val_loss"},
         "wandb": False,
-        "ckpt_path": False,
+        "ckpt_path": "/remote/ceph/user/l/llorente/tito_northern_retrain/model_checkpoint_graphnet/model5_retrain_dynedgeTITO_directionReco_500e_trainMaxPulses2020_valMaxPulses3000_batch325_numDatabaseFiles8_optimizer_<class 'torch.optim.adam.Adam'>_25_11-epoch=55-val_loss=-2.637405.ckpt",
     }
 
     MODEL = "model5"
-    INFERENCE = True
+    INFERENCE = False
 
-    #config['retrain_from_checkpoint'] = f'/remote/ceph/user/l/llorente/tito_northern_retrain/{MODEL}_NEWTEST_dynedgeTITO_directionReco_30e_trainMaxPulses2020_valMaxPulses3000_layerSize4_useGGTrue_usePPTrue_batch256_numDatabaseFiles8_state_dict.pth'
+    config['retrain_from_checkpoint'] = False
 
     config["use_global_features"] = use_global_features_all[MODEL]
     config["use_post_processing_layers"] = use_post_processing_layers_all[MODEL]
@@ -468,7 +468,7 @@ if __name__ == "__main__":
     run_name = (
         f"{MODEL}_retrain_dynedgeTITO_directionReco_{config['fit']['max_epochs']}e_trainMaxPulses{config['train_max_pulses']}_"
         f"valMaxPulses{config['val_max_pulses']}_batch{config['batch_size']}_numDatabaseFiles{config['num_database_files']}_"
-        f"optimizer_{config['optimizer_class']}_schedulerClass{config['scheduler_class'].__name__}"
+        f"optimizer_{config['optimizer_class']}_25_11"
     )
 
     # Configurations
@@ -570,9 +570,9 @@ if __name__ == "__main__":
 
         all_res = []
         #checkpoint_path = f"{config['archive']}/{run_name}.pth"
-        checkpoint_path = "/remote/ceph/user/l/llorente/tito_northern_retrain/model_checkpoint_graphnet/model5_retrain_dynedgeTITO_directionReco_500e_trainMaxPulses2020_valMaxPulses3000_batch325_numDatabaseFiles8_optimizer_<class 'torch.optim.adam.Adam'>_schedulerClassReduceLROnPlateau-epoch=40-val_loss=-2.634513.ckpt"
+        checkpoint_path = "/remote/ceph/user/l/llorente/tito_northern_retrain/model_checkpoint_graphnet/model5_retrain_dynedgeTITO_directionReco_500e_trainMaxPulses2020_valMaxPulses3000_batch325_numDatabaseFiles8_optimizer_<class '\''torch.optim.adam.Adam'\''>_schedulerClassReduceLROnPlateau-epoch=45-val_loss=-2.639040.ckpt"
         torch.multiprocessing.set_start_method("spawn", force=True)
-        run_name_pred = f"{MODEL}_retrain_from_northern_epoch40"
+        run_name_pred = f"{MODEL}_retrain_from_northern_epoch45"
         
         factor = 1
         pulse_breakpoints = [0, 500, 1000, 1500, 2000, 3000]  # 10000]

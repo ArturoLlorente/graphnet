@@ -50,7 +50,7 @@ class StandardModel(Model):
         assert isinstance(tasks, (list, tuple))
         assert all(isinstance(task, Task) for task in tasks)
         assert isinstance(graph_definition, GraphDefinition)
-        assert isinstance(gnn, GNN)
+        #assert isinstance(gnn, GNN)
 
         # Member variable(s)
         self._graph_definition = graph_definition

@@ -440,7 +440,62 @@ class Dataset(
         features, truth, node_truth, loss_weight = self._query(
             sequential_index
         )
-        graph = self._create_graph(features, truth, node_truth, loss_weight)
+        #graph = self._create_graph(features, truth, node_truth, loss_weight)
+        features_array = np.asarray(features)
+        time = features_array[:,4]
+        charge = features_array[:,5]
+        auxiliary = features_array[:,6]
+        event_idx = int(features_array[0,0])
+
+        time = (time - 1e4) / 3e4
+        charge = np.log10(charge) / 3.0
+
+        L = features_array.shape[0]
+        L0 = L
+
+        max_L = 192
+
+        if L < max_L:
+            time = np.pad(time, (0, max(0, max_L - L)))
+            charge = np.pad(charge, (0, max(0, max_L - L)))
+            auxiliary = np.pad(auxiliary, (0, max(0, max_L - L)))
+        else:
+            ids = torch.randperm(L).numpy()
+            auxiliary_n = np.where(~auxiliary)[0]
+            auxiliary_p = np.where(auxiliary)[0]
+            ids_n = ids[auxiliary_n][: min(max_L, len(auxiliary_n))]
+            ids_p = ids[auxiliary_p][: min(max_L - len(ids_n), len(auxiliary_p))]
+            ids = np.concatenate([ids_n, ids_p])
+            ids.sort()
+            time = time[ids]
+            charge = charge[ids]
+            auxiliary = auxiliary[ids]
+            L = len(ids)
+
+        attn_mask = torch.zeros(max_L, dtype=torch.bool)
+        attn_mask[:L] = True
+        pos_L = torch.from_numpy(features_array[:,1:4])
+        pos = torch.zeros(max_L, 3)
+        pos[:L] = pos_L
+
+
+        time = torch.from_numpy(time).float()
+        charge = torch.from_numpy(charge).float()
+        auxiliary = torch.from_numpy(auxiliary).long()
+
+        graph = Data(
+            time=torch.reshape(time, [1, max_L]),
+            charge=torch.reshape(charge, [1, max_L]),
+            pos=torch.reshape(pos, [1, max_L, 3]),
+            mask=torch.reshape(attn_mask, [1, max_L]),
+            idx=event_idx,
+            auxiliary=torch.reshape(auxiliary, [1, max_L]),
+            L0=L0,
+        )
+
+        for key,value in zip(self._truth, truth):
+            graph[key] = torch.tensor(value)
+
         return graph
 
     # Internal method(s)

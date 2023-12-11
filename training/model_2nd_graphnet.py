@@ -1,4 +1,5 @@
 import os
+import sys
 import pandas as pd
 from tqdm.auto import tqdm
 import torch
@@ -17,15 +18,11 @@ from pytorch_lightning.loggers import WandbLogger
 from graphnet.data.dataset import EnsembleDataset
 from graphnet.data.dataset import SQLiteDataset
 from graphnet.data.constants import FEATURES, TRUTH
-
 from graphnet.models import StandardModel, StandardModelPred
 from graphnet.models.graphs import KNNGraph
 from graphnet.models.gnn import DynEdgeTITO
 from graphnet.models.graphs.nodes import NodesAsPulses
-from graphnet.models.task.reconstruction import (
-    DirectionReconstructionWithKappa,
-)
-
+from graphnet.models.task.reconstruction import DirectionReconstructionWithKappa
 from graphnet.training.labels import Direction
 from graphnet.training.loss_functions import VonMisesFisher3DLoss, LossFunction
 from graphnet.training.callbacks import ProgressBar, PiecewiseLinearLR
@@ -35,10 +32,11 @@ from graphnet.training.utils import collate_fn, collator_sequence_buckleting
 from typing import Dict, List, Optional, Union, Callable, Any
 from torch.utils.data import DataLoader
 
-
 from graphnet.models.detector.detector import Detector
 from graphnet.models.task import Task
 
+sys.path.insert(0, "/remote/ceph/user/l/llorente/")
+from graphnet.models.gnn import DeepIceModel
 
 class IceCube86TITO(Detector):
     """`Detector` class for IceCube-86."""
@@ -56,27 +54,44 @@ class IceCube86TITO(Detector):
             "hlc": self._hlc,
         }
         return feature_map
-
+    
     def _dom_xyz(self, x: torch.Tensor) -> torch.Tensor:
         return x / 500.0
-
     def _dom_time(self, x: torch.Tensor) -> torch.Tensor:
         return (x - 1.0e04) / (500.0 * 0.23)
-
     def _charge(self, x: torch.Tensor) -> torch.Tensor:
         return torch.log10(x)
-
     def _rde(self, x: torch.Tensor) -> torch.Tensor:
         return (x - 1.25) / 0.25
-
     def _pmt_area(self, x: torch.Tensor) -> torch.Tensor:
         return x / 0.05
-
     def _hlc(self, x: torch.Tensor) -> torch.Tensor:
         return torch.where(
             torch.eq(x, 0), torch.ones_like(x), torch.ones_like(x) * 0
         )
+class IceCubeKaggle(Detector):
+    """`Detector` class for Kaggle Competition."""
 
+    def feature_map(self) -> Dict[str, Callable]:
+        """Map standardization functions to each dimension of input data."""
+        feature_map = {
+            "dom_x": self._xyz,
+            "dom_y": self._xyz,
+            "dom_z": self._xyz,
+            "time": self._time,
+            "charge": self._charge,
+            "auxiliary": self._identity,
+        }
+        return feature_map
+
+    def _xyz(self, x: torch.tensor) -> torch.tensor:
+        return x / 500.0
+
+    def _time(self, x: torch.tensor) -> torch.tensor:
+        return (x - 1.0e04) / 3.0e4
+
+    def _charge(self, x: torch.tensor) -> torch.tensor:
+        return torch.log10(x) / 3.0
 
 class DirectionReconstructionWithKappaTITO(Task):
     default_target_labels = ["direction"]
@@ -259,21 +274,17 @@ def build_model(
     config: Dict[str, Any],
 ):
 
-    gnn = DynEdgeTITO(
-        nb_inputs=config["graph_definition"].nb_outputs,
-        dyntrans_layer_sizes=config["dyntrans_layer_sizes"],
-        global_pooling_schemes=config["global_pooling_schemes"],
-        use_global_features=config["use_global_features"],
-        use_post_processing_layers=config["use_post_processing_layers"],
-    )
+    #gnn = DynEdgeTITO(
+    #    nb_inputs=config["graph_definition"].nb_outputs,
+    #    dyntrans_layer_sizes=config["dyntrans_layer_sizes"],
+    #    global_pooling_schemes=config["global_pooling_schemes"],
+    #    use_global_features=config["use_global_features"],
+    #    use_post_processing_layers=config["use_post_processing_layers"],
+    #)
+    gnn = DeepIceModel(dim=768, dim_base=192, depth=12, head_size=64)
 
-    task = DirectionReconstructionWithKappaTITO(
-        hidden_size=gnn.nb_outputs,
-        target_labels="direction",
-        loss_function=DistanceLoss2(),
-    )
     task2 = DirectionReconstructionWithKappa(
-        hidden_size=gnn.nb_outputs,
+        hidden_size=768,
         target_labels="direction",
         loss_function=VonMisesFisher3DLoss(),
     )
@@ -281,7 +292,7 @@ def build_model(
     model_kwargs = {
         "graph_definition": config["graph_definition"],
         "gnn": gnn,
-        "tasks": [task, task2],
+        "tasks": [task2],
         "optimizer_class": config["optimizer_class"],
         "optimizer_kwargs": {"lr": 1e-03, "eps": 1e-03},
         "scheduler_class": config["scheduler_class"],
@@ -402,16 +413,16 @@ def inference(
 if __name__ == "__main__":
 
     config = {
-        "archive": "/remote/ceph/user/l/llorente/tito_northern_retrain",
+        "archive": "/remote/ceph/user/l/llorente/kaggle",
         "target": "direction",
         "weight_column_name": None,
         "weight_table_name": None,
-        "batch_size": 325,
+        "batch_size": 10,
         "early_stopping_patience": 15,
-        "num_workers": 32,
-        "pulsemap": "InIceDSTPulses",
-        "truth_table": "truth",
-        "index_column": "event_no",
+        "num_workers": 4,
+        "pulsemap": "pulse_table",
+        "truth_table": "meta_table",
+        "index_column": "event_id",
         "labels": {"direction": Direction()},
         "global_pooling_schemes": ["max"],
         "accumulate_grad_batches": {0: 3},
@@ -424,13 +435,13 @@ if __name__ == "__main__":
         "loss_weight_table": None,
         "loss_weight_column": None,
         "persistent_workers": True,
-        "detector": IceCube86TITO(),
+        "detector": IceCubeKaggle(),
         "node_definition": NodesAsPulses(),
         "nb_nearest_neighbours": 6,
-        "features": ["dom_x", "dom_y", "dom_z", "dom_time", "charge", "hlc"],
-        "truth": TRUTH.ICECUBE86,
+        "features": ["dom_x", "dom_y", "dom_z", "time", "charge", "auxiliary"],
+        "truth": TRUTH.KAGGLE,
         "columns_nearest_neighbours": [0, 1, 2],
-        "collate_fn": collator_sequence_buckleting([0.8]),
+        "collate_fn": collate_fn,#collator_sequence_buckleting([0.8]),
         "prediction_columns": [
             "dir_x_pred",
             "dir_y_pred",
@@ -438,10 +449,9 @@ if __name__ == "__main__":
             "dir_kappa_pred",
         ],
         "fit": {
-            "max_epochs": 500,
+            "max_epochs": 10,
             "gpus": [],
             "check_val_every_n_epoch": 1,
-            "precision": "16-mixed",
         },
         "optimizer_class": Adam,
         "scheduler_class": ReduceLROnPlateau,
@@ -476,22 +486,9 @@ if __name__ == "__main__":
     torch.multiprocessing.set_sharing_strategy("file_system")
     # torch.multiprocessing.set_start_method('spawn', force=True)
 
-    db_dir = "/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/"
-    sel_dir = "/remote/ceph/user/l/llorente/northern_track_selection/"
-    all_databases, all_selections = [], []
-    test_idx = 5
-    for idx in range(1, config["num_database_files"] + 1):
-        if idx == test_idx:
-            test_database = (
-                db_dir + f"dev_northern_tracks_muon_labels_v3_part_{idx}.db"
-            )
-            test_selection = pd.read_csv(sel_dir + f"part_{idx}.csv")
-        else:
-            all_databases.append(
-                db_dir + f"dev_northern_tracks_muon_labels_v3_part_{idx}.db"
-            )
-            all_selections.append(pd.read_csv(sel_dir + f"part_{idx}.csv"))
-    # get_list_of_databases:
+    all_databases = ['/remote/ceph/user/l/llorente/kaggle/databases_merged/batch_660_nox.db']
+    all_selections = [pd.read_csv('/remote/ceph/user/l/llorente/kaggle/selection_files/pulse_information_660.csv')]
+
     train_selections = []
     for selection in all_selections:
         train_selections.append(selection.loc[selection["n_pulses"] < config["train_max_pulses"],:][config["index_column"]].ravel().tolist())
@@ -541,6 +538,7 @@ if __name__ == "__main__":
                 )
             )
 
+    model = DeepIceModel(dim=768, dim_base=192, depth=12, head_size=64)
     model = build_model(config)
 
     if not INFERENCE:
@@ -557,15 +555,30 @@ if __name__ == "__main__":
         if validation_dataloader is not None:
             config["fit"]["val_dataloader"] = validation_dataloader
 
+        weights = "/remote/ceph/user/l/llorente/icecube_2nd_place/ice-cube-final-models/baselineV3_BE_globalrel_d64_0_3emaFT_2.pth"
+        if weights:
+            print("Loading weights from ...",weights)
+            state_dict = torch.load(weights)
+            #new_state_dict = {'_gnn.' + k: v for k, v in state_dict.items()[:-2]}
+            #new_state_dict['_tasks.0._affine.weight'] = state_dict['proj_out.weight']
+            #new_state_dict['_tasks.0._affine.bias'] = state_dict['proj_out.bias']
+
+            new_state_dict = {('_tasks.0._affine.weight' if k == 'proj_out.weight' else '_tasks.0._affine.bias' if k == 'proj_out.bias' else '_gnn.' + k): v for k, v in state_dict.items()}
+
+            # Update last two keys
+            #new_state_dict['tasks.0._affine.weight'] = state_dict['proj_out.weight']
+            #new_state_dict['tasks.0._affine.bias'] = state_dict['proj_out.bias']
+            model.load_state_dict(new_state_dict)
+
         model.fit(
             training_dataloader,
             callbacks=callbacks,
             **config["fit"],
         )
-        model.save(os.path.join(config["archive"], f"{run_name}.pth"))
-        model.save_state_dict(
-            os.path.join(config["archive"], f"{run_name}_state_dict.pth")
-        )
+        #model.save(os.path.join(config["archive"], f"{run_name}.pth"))
+        #model.save_state_dict(
+        #    os.path.join(config["archive"], f"{run_name}_state_dict.pth")
+        #)
         print(f"Model saved to {config['archive']}/{run_name}.pth")
     else:
 

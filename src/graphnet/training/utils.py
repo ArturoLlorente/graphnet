@@ -24,7 +24,7 @@ def collate_fn(graphs: List[Data]) -> Batch:
 
     Should not occur in "production".
     """
-    graphs = [g for g in graphs if g.n_pulses > 1]
+    graphs = [g for g in graphs if g.L0 > 1]
     return Batch.from_data_list(graphs)
 
 

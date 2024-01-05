@@ -38,6 +38,25 @@ from graphnet.utilities.config.parsing import (
 )
 
 
+import pandas as pd
+import os
+from scipy.interpolate import interp1d
+from sklearn.preprocessing import RobustScaler
+def ice_transparency(path, datum=1950):
+    # Data from page 31 of https://arxiv.org/pdf/1301.5361.pdf
+    # Datum is from footnote 8 of page 29
+    df = pd.read_csv(os.path.join(path, "ice_transparency.txt"), delim_whitespace=True)
+    df["z"] = df["depth"] - datum
+    df["z_norm"] = df["z"] / 500
+    df[["scattering_len_norm", "absorption_len_norm"]] = RobustScaler().fit_transform(
+        df[["scattering_len", "absorption_len"]]
+    )
+
+    # These are both roughly equivalent after scaling
+    f_scattering = interp1d(df["z_norm"], df["scattering_len_norm"])
+    f_absorption = interp1d(df["z_norm"], df["absorption_len_norm"])
+    return f_scattering, f_absorption
+
 class ColumnMissingException(Exception):
     """Exception to indicate a missing column in a dataset."""
 
@@ -440,11 +459,13 @@ class Dataset(
         features, truth, node_truth, loss_weight = self._query(
             sequential_index
         )
+
+        
         #graph = self._create_graph(features, truth, node_truth, loss_weight)
         features_array = np.asarray(features)
         time = features_array[:,4]
         charge = features_array[:,5]
-        auxiliary = features_array[:,6]
+        auxiliary = np.logical_not(features_array[:,6]).astype('float64')
         event_idx = int(features_array[0,0])
 
         time = (time - 1e4) / 3e4
@@ -453,7 +474,7 @@ class Dataset(
         L = features_array.shape[0]
         L0 = L
 
-        max_L = 192
+        max_L = 768
 
         if L < max_L:
             time = np.pad(time, (0, max(0, max_L - L)))
@@ -461,8 +482,10 @@ class Dataset(
             auxiliary = np.pad(auxiliary, (0, max(0, max_L - L)))
         else:
             ids = torch.randperm(L).numpy()
-            auxiliary_n = np.where(~auxiliary)[0]
-            auxiliary_p = np.where(auxiliary)[0]
+            #auxiliary_n = np.where(~auxiliary)[0]
+            #auxiliary_p = np.where(auxiliary)[0]
+            auxiliary_n = np.where(auxiliary == 0)[0]
+            auxiliary_p = np.where(auxiliary == 1)[0]
             ids_n = ids[auxiliary_n][: min(max_L, len(auxiliary_n))]
             ids_p = ids[auxiliary_p][: min(max_L - len(ids_n), len(auxiliary_p))]
             ids = np.concatenate([ids_n, ids_p])
@@ -474,10 +497,56 @@ class Dataset(
 
         attn_mask = torch.zeros(max_L, dtype=torch.bool)
         attn_mask[:L] = True
-        pos_L = torch.from_numpy(features_array[:,1:4])
+        pos_L = torch.from_numpy(features_array[:,1:4]/500)
         pos = torch.zeros(max_L, 3)
-        pos[:L] = pos_L
+        pos[:L] = pos_L[:L]
 
+        path_ice_properties = '/remote/ceph/user/l/llorente/icecube_2nd_place/data/'
+        ice_properties_data = ice_transparency(path_ice_properties)
+        ice_properties = np.stack(
+            [ice_properties_data[0](pos[:L, 2]), ice_properties_data[1](pos[:L, 2])], -1
+        )
+        ice_properties = np.pad(ice_properties, ((0, max(0, max_L - L)), (0, 0)))
+        ice_properties = torch.from_numpy(ice_properties).float()
+
+
+        sensors = pd.read_csv(os.path.join(path_ice_properties, "sensor_geometry.csv")).astype(
+            {
+                "sensor_id": np.int16,
+                "x": np.float32,
+                "y": np.float32,
+                "z": np.float32,
+            }
+        )
+        sensors["string"] = 0
+        sensors["qe"] = 0  # 1
+
+        for i in range(len(sensors) // 60):
+            start, end = i * 60, (i * 60) + 60
+            sensors.loc[start:end, "string"] = i
+
+            # High Quantum Efficiency in the lower 50 DOMs - https://arxiv.org/pdf/2209.03042.pdf (Figure 1)
+            if i in range(78, 86):
+                start_veto, end_veto = i * 60, (i * 60) + 10
+                start_core, end_core = end_veto + 1, (i * 60) + 60
+                sensors.loc[start_core:end_core, "qe"] = 1  # 1.35
+        sensors_graphnet = pd.DataFrame(
+            {
+                "dom_x": features_array[:,1],
+                "dom_y": features_array[:,2],
+                "dom_z": features_array[:,3],
+                "event_no": features_array[:,0],
+            }
+        )
+
+
+        merged_df = pd.merge(sensors_graphnet, sensors, left_on=['dom_x', 'dom_y', 'dom_z'], right_on=['x', 'y', 'z'], how='inner', suffixes=['_1', '_2'])
+        qe = torch.zeros(max_L)
+
+        if L0 < max_L:
+            qe[:L] = torch.from_numpy(merged_df["qe"].values).float()
+        else:
+            qe[:L] = torch.from_numpy(merged_df["qe"].values[ids]).float()
 
         time = torch.from_numpy(time).float()
         charge = torch.from_numpy(charge).float()
@@ -490,11 +559,17 @@ class Dataset(
             mask=torch.reshape(attn_mask, [1, max_L]),
             idx=event_idx,
             auxiliary=torch.reshape(auxiliary, [1, max_L]),
-            L0=L0,
+            n_pulses=L0,
+            ice_properties=torch.reshape(ice_properties, [1, max_L, 2]),
+            qe=torch.reshape(qe, [1, max_L]),
         )
 
         for key,value in zip(self._truth, truth):
             graph[key] = torch.tensor(value)
+
+        graph = self._graph_definition._add_custom_labels(graph, self._label_fns)
+
+
 
         return graph
 

@@ -4,4 +4,4 @@ from .convnet import ConvNet
 from .dynedge import DynEdge
 from .dynedge_jinst import DynEdgeJINST
 from .dynedge_kaggle_tito import DynEdgeTITO
-from .DeepIce_gnn import DeepIceModel
+from .DeepIce_gnn import DeepIceModel, EncoderWithDirectionReconstructionV22, EncoderWithDirectionReconstructionV23

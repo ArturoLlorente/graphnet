@@ -443,3 +443,31 @@ class VonMisesFisher3DLoss(VonMisesFisherLoss):
         kappa = prediction[:, 3]
         p = kappa.unsqueeze(1) * prediction[:, [0, 1, 2]]
         return self._evaluate(p, target)
+
+class VonMisesFisher3DLossNew(VonMisesFisherLoss):
+    """von Mises-Fisher loss function vectors in the 3D plane."""
+
+    def _forward(self, prediction: Tensor, target: Tensor) -> Tensor:
+        """Calculate von Mises-Fisher loss for a direction in the 3D.
+
+        Args:
+            prediction: Output of the model. Must have shape [N, 4] where
+                columns 0, 1, 2 are predictions of `direction` and last column
+                is an estimate of `kappa`.
+            target: Target tensor, extracted from graph object.
+
+        Returns:
+            Elementwise von Mises-Fisher loss terms. Shape [N,]
+        """
+        sa2 = torch.sin(target[:, 0])
+        ca2 = torch.cos(target[:, 0])
+        sz2 = torch.sin(target[:, 1])
+        cz2 = torch.cos(target[:, 1])
+        t = torch.stack([sa2 * sz2, ca2 * sz2, cz2], -1)
+
+        p = prediction.float()
+        l = torch.norm(prediction.float(), dim=-1).unsqueeze(-1)
+        p = torch.cat([prediction.float() / l, l], -1)
+
+        loss = VonMisesFisher3DLoss()(p, t)
+        return loss

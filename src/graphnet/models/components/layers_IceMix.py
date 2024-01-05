@@ -363,62 +363,115 @@ class Block(nn.Module):
         return x
 
 
-class LocalBlock(nn.Module):
-    def __init__(
-        self,
-        dim=192,
-        num_heads=192 // 64,
-        mlp_ratio=4,
-        drop_path=0,
-        init_values=1,
-        **kwargs,
-    ):
+#class LocalBlock(nn.Module):
+#    def __init__(
+#        self,
+#        dim=192,
+#        num_heads=192 // 64,
+#        mlp_ratio=4,
+#        drop_path=0,
+#        init_values=1,
+#        **kwargs,
+#    ):
+#        super().__init__()
+#        self.proj_rel_bias = nn.Linear(dim // num_heads, dim // num_heads)
+#        self.block = Block_rel(
+#            dim=dim,
+#            num_heads=num_heads,
+#            mlp_ratio=mlp_ratio,
+#            drop_path=drop_path,
+#            init_values=init_values,
+#        )
+#
+#    def forward(self, x, nbs, key_padding_mask=None, rel_pos_bias=None):
+#        B, Lmax, C = x.shape
+#        mask = (
+#            key_padding_mask
+#            if not (key_padding_mask is None)
+#            else torch.ones(B, Lmax, dtype=torch.bool, device=x.device)
+#        )
+#
+#        m = torch.gather(mask.unsqueeze(1).expand(-1, Lmax, -1), 2, nbs)
+#        attn_mask = torch.zeros(m.shape, device=m.device)
+#        attn_mask[~mask] = -torch.inf
+#        attn_mask = attn_mask[mask]
+#
+#        if rel_pos_bias is not None:
+#            rel_pos_bias = torch.gather(
+#                rel_pos_bias,
+#                2,
+#                nbs.unsqueeze(-1).expand(-1, -1, -1, rel_pos_bias.shape[-1]),
+#            )
+#            rel_pos_bias = rel_pos_bias[mask]
+#            rel_pos_bias = self.proj_rel_bias(rel_pos_bias).unsqueeze(1)
+#
+#        xl = torch.gather(
+#            x.unsqueeze(1).expand(-1, Lmax, -1, -1),
+#            2,
+#            nbs.unsqueeze(-1).expand(-1, -1, -1, C),
+#        )
+#        xl = xl[mask]
+#        # modify only the node (0th element)
+#        # print(xl[:,:1].shape,rel_pos_bias.shape,attn_mask[:,:1].shape,xl.shape)
+#        xl = self.block(
+#            xl[:, :1],
+#            rel_pos_bias=rel_pos_bias,
+#            key_padding_mask=attn_mask[:, :1],
+#            kv=xl,
+#        )
+#        x = torch.zeros(x.shape, device=x.device, dtype=xl.dtype)
+#        x[mask] = xl.squeeze(1)
+#        return x
+    
+class ScaledSinusoidalEmbedding(nn.Module):
+    def __init__(self, dim=32, M=10000):
         super().__init__()
-        self.proj_rel_bias = nn.Linear(dim // num_heads, dim // num_heads)
-        self.block = Block_rel(
-            dim=dim,
-            num_heads=num_heads,
-            mlp_ratio=mlp_ratio,
-            drop_path=drop_path,
-            init_values=init_values,
+        assert (dim % 2) == 0
+        self.scale = nn.Parameter(torch.ones(1) * dim**-0.5)
+        self.dim = dim
+        self.M = M
+
+    def forward(self, x):
+        device = x.device
+        half_dim = self.dim // 2
+        emb = math.log(self.M) / half_dim
+        emb = torch.exp(torch.arange(half_dim, device=device) * (-emb))
+        emb = x[..., None] * emb[None, ...]
+        emb = torch.cat((emb.sin(), emb.cos()), dim=-1)
+        return emb * self.scale
+    
+    
+class ExtractorV11Scaled(nn.Module):
+    def __init__(self, dim_base=128, dim=384):
+        super().__init__()
+        self.pos = ScaledSinusoidalEmbedding(dim=dim_base)
+        self.emb_charge = ScaledSinusoidalEmbedding(dim=dim_base)
+        self.time = ScaledSinusoidalEmbedding(dim=dim_base)
+        self.aux_emb = nn.Embedding(2, dim_base // 2)
+        self.emb2 = ScaledSinusoidalEmbedding(dim=dim_base // 2)
+        self.proj = nn.Sequential(
+            nn.Linear(6 * dim_base, 6 * dim_base),
+            nn.LayerNorm(6 * dim_base),
+            nn.GELU(),
+            nn.Linear(6 * dim_base, dim),
         )
 
-    def forward(self, x, nbs, key_padding_mask=None, rel_pos_bias=None):
-        B, Lmax, C = x.shape
-        mask = (
-            key_padding_mask
-            if not (key_padding_mask is None)
-            else torch.ones(B, Lmax, dtype=torch.bool, device=x.device)
-        )
+    def forward(self, x, Lmax=None):
+        pos = x["pos"] if Lmax is None else x["pos"][:, :Lmax]
+        charge = x["charge"] if Lmax is None else x["charge"][:, :Lmax]
+        time = x["time"] if Lmax is None else x["time"][:, :Lmax]
+        auxiliary = x["auxiliary"] if Lmax is None else x["auxiliary"][:, :Lmax]
+        length = torch.log10(x["L0"].to(dtype=pos.dtype))
 
-        m = torch.gather(mask.unsqueeze(1).expand(-1, Lmax, -1), 2, nbs)
-        attn_mask = torch.zeros(m.shape, device=m.device)
-        attn_mask[~mask] = -torch.inf
-        attn_mask = attn_mask[mask]
-
-        if rel_pos_bias is not None:
-            rel_pos_bias = torch.gather(
-                rel_pos_bias,
-                2,
-                nbs.unsqueeze(-1).expand(-1, -1, -1, rel_pos_bias.shape[-1]),
-            )
-            rel_pos_bias = rel_pos_bias[mask]
-            rel_pos_bias = self.proj_rel_bias(rel_pos_bias).unsqueeze(1)
-
-        xl = torch.gather(
-            x.unsqueeze(1).expand(-1, Lmax, -1, -1),
-            2,
-            nbs.unsqueeze(-1).expand(-1, -1, -1, C),
+        x = torch.cat(
+            [
+                self.pos(4096 * pos).flatten(-2),
+                self.emb_charge(1024 * charge),
+                self.time(4096 * time),
+                self.aux_emb(auxiliary),
+                self.emb2(length).unsqueeze(1).expand(-1, pos.shape[1], -1),
+            ],
+            -1,
         )
-        xl = xl[mask]
-        # modify only the node (0th element)
-        # print(xl[:,:1].shape,rel_pos_bias.shape,attn_mask[:,:1].shape,xl.shape)
-        xl = self.block(
-            xl[:, :1],
-            rel_pos_bias=rel_pos_bias,
-            key_padding_mask=attn_mask[:, :1],
-            kv=xl,
-        )
-        x = torch.zeros(x.shape, device=x.device, dtype=xl.dtype)
-        x[mask] = xl.squeeze(1)
+        x = self.proj(x)
         return x

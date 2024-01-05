@@ -24,7 +24,7 @@ from graphnet.models.gnn import DynEdgeTITO
 from graphnet.models.graphs.nodes import NodesAsPulses
 from graphnet.models.task.reconstruction import DirectionReconstructionWithKappa
 from graphnet.training.labels import Direction
-from graphnet.training.loss_functions import VonMisesFisher3DLoss, LossFunction
+from graphnet.training.loss_functions import VonMisesFisher3DLoss, LossFunction, VonMisesFisher3DLossNew
 from graphnet.training.callbacks import ProgressBar, PiecewiseLinearLR
 from graphnet.training.utils import make_dataloader
 from graphnet.training.utils import collate_fn, collator_sequence_buckleting
@@ -135,41 +135,6 @@ class DistanceLoss2(LossFunction):
         thetaLoss = torch.arccos(cosLoss)
         return thetaLoss
 
-
-use_global_features_all = {
-    "model1": True,
-    "model2": True,
-    "model3": False,
-    "model4": True,
-    "model5": True,
-    "model6": True,
-}
-use_post_processing_layers_all = {
-    "model1": True,
-    "model2": True,
-    "model3": False,
-    "model4": True,
-    "model5": True,
-    "model6": True,
-}
-dyntrans_layer_sizes_all = {
-    "model1": [(256, 256), (256, 256), (256, 256), (256, 256)],
-    "model2": [(256, 256), (256, 256), (256, 256), (256, 256)],
-    "model3": [(256, 256), (256, 256), (256, 256)],
-    "model4": [(256, 256), (256, 256), (256, 256)],
-    "model5": [(256, 256), (256, 256), (256, 256), (256, 256)],
-    "model6": [(256, 256), (256, 256), (256, 256), (256, 256)],
-}
-columns_nearest_neighbours_all = {
-    "model1": [0, 1, 2],
-    "model2": [0, 1, 2],
-    "model3": [0, 1, 2],
-    "model4": [0, 1, 2, 3],
-    "model5": [0, 1, 2],
-    "model6": [0, 1, 2, 3],
-}
-
-
 def make_dataloaders(
     db: Union[List[str], str],
     train_selection: Optional[List[int]],
@@ -274,35 +239,26 @@ def build_model(
     config: Dict[str, Any],
 ):
 
-    #gnn = DynEdgeTITO(
-    #    nb_inputs=config["graph_definition"].nb_outputs,
-    #    dyntrans_layer_sizes=config["dyntrans_layer_sizes"],
-    #    global_pooling_schemes=config["global_pooling_schemes"],
-    #    use_global_features=config["use_global_features"],
-    #    use_post_processing_layers=config["use_post_processing_layers"],
-    #)
     gnn = DeepIceModel(dim=768, dim_base=192, depth=12, head_size=64)
 
-    task2 = DirectionReconstructionWithKappa(
+    task = DirectionReconstructionWithKappa(
         hidden_size=768,
         target_labels="direction",
-        loss_function=VonMisesFisher3DLoss(),
+        loss_function=VonMisesFisher3DLossNew,
     )
 
     model_kwargs = {
         "graph_definition": config["graph_definition"],
         "gnn": gnn,
-        "tasks": [task2],
+        "tasks": [task],
         "optimizer_class": config["optimizer_class"],
         "optimizer_kwargs": {"lr": 1e-03, "eps": 1e-03},
         "scheduler_class": config["scheduler_class"],
         "scheduler_kwargs": config["scheduler_kwargs"],
         "scheduler_config": config["scheduler_config"],
     }
-    if not INFERENCE:
-        model = StandardModel(**model_kwargs)
-    else:
-        model = StandardModelPred(**model_kwargs)
+    
+    model = StandardModel(**model_kwargs)
 
     model.prediction_columns = config["prediction_columns"]
     model.additional_attributes = config["additional_attributes"]
@@ -316,7 +272,6 @@ def inference(
     test_min_pulses: int,
     test_max_pulses: int,
     batch_size: int,
-    use_all_features_in_prediction: bool = True,
     test_path: str = None,
     test_selection_file: str = None,
     config: Dict[str, Any] = None,
@@ -352,7 +307,8 @@ def inference(
 
     if "state_dict" in checkpoint:
         checkpoint = checkpoint["state_dict"]
-    model.load_state_dict(checkpoint)
+    new_checkpoint = {('_tasks.0._affine.weight' if k == 'proj_out.weight' else '_tasks.0._affine.bias' if k == 'proj_out.bias' else '_gnn.' + k): v for k, v in checkpoint.items()}
+    model.load_state_dict(new_checkpoint)
     event_nos, zenith, azimuth, preds = [], [], [], []
     print("start predict")
     validateMode = True
@@ -360,43 +316,18 @@ def inference(
         model.to(f"cuda:{device[0]}")
         for batch in tqdm(test_dataloader):
             pred = model(batch.to(f"cuda:{device[0]}"))
-
-            if use_all_features_in_prediction:
-                preds.append(torch.cat(pred, axis=-1))
-            else:
-                preds.append(pred[0])
-            event_nos.append(batch.event_no)
+            preds.append(pred[0])
+            event_nos.append(batch.event_id)
             if validateMode:
                 zenith.append(batch.zenith)
                 azimuth.append(batch.azimuth)
     preds = torch.cat(preds).to("cpu").detach().numpy()
-
-    if use_all_features_in_prediction:
-        if preds.shape[1] == 128 + 8:
-            columns = [
-                "direction_x",
-                "direction_y",
-                "direction_z",
-                "direction_kappa",
-                "direction_x1",
-                "direction_y1",
-                "direction_z1",
-                "direction_kappa1",
-            ] + [f"idx{i}" for i in range(128)]
-        else:
-            columns = [
-                "direction_x",
-                "direction_y",
-                "direction_z",
-                "direction_kappa",
-            ] + [f"idx{i}" for i in range(128)]
-    else:
-        columns = [
-            "direction_x",
-            "direction_y",
-            "direction_z",
-            "direction_kappa",
-        ]
+    columns = [
+        "direction_x",
+        "direction_y",
+        "direction_z",
+        "direction_kappa",
+    ]
 
     results = pd.DataFrame(preds, columns=columns)
     results[config["index_column"]] = (
@@ -450,7 +381,7 @@ if __name__ == "__main__":
         ],
         "fit": {
             "max_epochs": 10,
-            "gpus": [],
+            "gpus": [0],
             "check_val_every_n_epoch": 1,
         },
         "optimizer_class": Adam,
@@ -460,17 +391,10 @@ if __name__ == "__main__":
         "wandb": False,
         "ckpt_path": False#"/remote/ceph/user/l/llorente/tito_northern_retrain/model_checkpoint_graphnet/model5_retrain_dynedgeTITO_directionReco_500e_trainMaxPulses2020_valMaxPulses3000_batch325_numDatabaseFiles8_optimizer_<class 'torch.optim.adam.Adam'>_25_11-epoch=55-val_loss=-2.637405.ckpt",
     }
-
-    MODEL = "model5"
-    INFERENCE = False
+    config["additional_attributes"] = [ "zenith", "azimuth", config["index_column"], "energy"]
+    INFERENCE = True
 
     config['retrain_from_checkpoint'] = False
-
-    config["use_global_features"] = use_global_features_all[MODEL]
-    config["use_post_processing_layers"] = use_post_processing_layers_all[MODEL]
-    config["dyntrans_layer_sizes"] = dyntrans_layer_sizes_all[MODEL]
-    config["columns_nearest_neighbours"] = columns_nearest_neighbours_all[MODEL]
-    config["additional_attributes"] = [ "zenith", "azimuth", config["index_column"], "energy"]
 
     if len(config["fit"]["gpus"]) > 1:
         config["fit"]["distribution_strategy"] = "ddp"
@@ -496,6 +420,10 @@ if __name__ == "__main__":
     
     val_selection = (selection.loc[(selection["n_pulses"] < config["val_max_pulses"]), :][config["index_column"]].ravel().tolist())
     val_selection = val_selection[int(len(val_selection) * 0.9) :]
+
+    test_database = '/remote/ceph/user/l/llorente/kaggle/databases_merged/batch_660_nox.db'
+    test_selection = pd.read_csv('/remote/ceph/user/l/llorente/kaggle/selection_files/pulse_information_660.csv')
+
 
     config["graph_definition"] = KNNGraph(
         detector=config["detector"],
@@ -559,15 +487,7 @@ if __name__ == "__main__":
         if weights:
             print("Loading weights from ...",weights)
             state_dict = torch.load(weights)
-            #new_state_dict = {'_gnn.' + k: v for k, v in state_dict.items()[:-2]}
-            #new_state_dict['_tasks.0._affine.weight'] = state_dict['proj_out.weight']
-            #new_state_dict['_tasks.0._affine.bias'] = state_dict['proj_out.bias']
-
             new_state_dict = {('_tasks.0._affine.weight' if k == 'proj_out.weight' else '_tasks.0._affine.bias' if k == 'proj_out.bias' else '_gnn.' + k): v for k, v in state_dict.items()}
-
-            # Update last two keys
-            #new_state_dict['tasks.0._affine.weight'] = state_dict['proj_out.weight']
-            #new_state_dict['tasks.0._affine.bias'] = state_dict['proj_out.bias']
             model.load_state_dict(new_state_dict)
 
         model.fit(
@@ -583,12 +503,11 @@ if __name__ == "__main__":
     else:
 
         all_res = []
-        #checkpoint_path = f"{config['archive']}/{run_name}.pth"
-        checkpoint_path = "/remote/ceph/user/l/llorente/tito_northern_retrain/model_checkpoint_graphnet/model5_retrain_dynedgeTITO_directionReco_500e_trainMaxPulses2020_valMaxPulses3000_batch325_numDatabaseFiles8_optimizer_<class '\''torch.optim.adam.Adam'\''>_schedulerClassReduceLROnPlateau-epoch=45-val_loss=-2.639040.ckpt"
-        torch.multiprocessing.set_start_method("spawn", force=True)
-        run_name_pred = f"{MODEL}_retrain_from_northern_epoch45"
+        checkpoint_path = f"/remote/ceph/user/l/llorente/icecube_2nd_place/ice-cube-final-models/baselineV3_BE_globalrel_d64_0_3emaFT_2.pth"
+        #torch.multiprocessing.set_start_method("spawn", force=True)
+        run_name_pred = f"predict_B_model_64_2"
         
-        factor = 1
+        factor = 1/2
         pulse_breakpoints = [0, 500, 1000, 1500, 2000, 3000]  # 10000]
         batch_sizes_per_pulse = [1800, 175, 40, 11, 4]  # 5, 2]
         config["num_workers"] = 16
@@ -599,7 +518,7 @@ if __name__ == "__main__":
             print(
                 f"predicting {min_pulse} to {max_pulse} pulses with batch size {int(factor*batch_sizes_per_pulse[pulse_breakpoints.index(max_pulse)-1])}"
             )
-            pred_checkpoint_path = f"/remote/ceph/user/l/llorente/tito_northern_retrain/backup_inference/{run_name_pred}_{min_pulse}to{max_pulse}pulses.pkl"
+            pred_checkpoint_path = f"/remote/ceph/user/l/llorente/IceMix_solution_northern/backup_inference/{run_name_pred}_{min_pulse}to{max_pulse}pulses.pkl"
             if os.path.exists(pred_checkpoint_path):
                 results = pickle.load(open(pred_checkpoint_path, "rb"))
             else:
@@ -611,7 +530,6 @@ if __name__ == "__main__":
                         factor * batch_sizes_per_pulse[pulse_breakpoints.index(max_pulse) - 1]
                     ),
                     checkpoint_path=checkpoint_path,
-                    use_all_features_in_prediction=True,
                     test_path=test_database,
                     test_selection_file=test_selection,
                     config=config,
@@ -624,6 +542,6 @@ if __name__ == "__main__":
 
         results = pd.concat(all_res).sort_values(config["index_column"])
         
-        path_to_save = "/remote/ceph/user/l/llorente/tito_northern_retrain"
+        path_to_save = "/remote/ceph/user/l/llorente/IceMix_solution_northern"
         results.to_csv(f"{path_to_save}/{run_name_pred}.csv")
         print(f"predicted and saved in {path_to_save}/{run_name_pred}.csv")

@@ -163,6 +163,8 @@ class Task(Model):
             weights = data[self._loss_weight]
         else:
             weights = None
+        if target.size(dim=1) == 1:
+            target = target.reshape(-1, 3)
         loss = (
             self._loss_function(pred, target, weights=weights)
             + self._regularisation_loss

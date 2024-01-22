@@ -13,3 +13,4 @@ from .standard_model import StandardModel
 from .standard_model_prediction import StandardModelPred
 from .standard_model_stacking import StandardModelStacking
 from .standard_model_prediction_tito import StandardModelPredTito
+from .standard_average_model import StandardAverageModel

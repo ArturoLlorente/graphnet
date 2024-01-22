@@ -406,6 +406,12 @@ class sensitivity_plots:
                         ax.step(10**percentile_calculations[event_type][pred_name]['mean'], percentile_calculations[event_type][pred_name][percentile], label=None, ls=ls, color=percentile_calculations[event_type][pred_name]['colour'], where='mid')
                     else:
                         ax.plot(10**percentile_calculations[event_type][pred_name]['mean'], percentile_calculations[event_type][pred_name][percentile], label=None, ls=ls, color=percentile_calculations[event_type][pred_name]['colour'])
+                        
+        
+                for i in range(len(percentile_calculations[event_type][pred_name]['mean'])-2):
+                    print([10**percentile_calculations[event_type][pred_name]['mean'][:-1][i], 10**percentile_calculations[event_type][pred_name]['mean'][1:][i]])
+                    ax.fill_between([10**percentile_calculations[event_type][pred_name]['mean'][:-1][i], 10**percentile_calculations[event_type][pred_name]['mean'][1:][i]], percentile_calculations[event_type][pred_name]['p_16'][i], 
+                                percentile_calculations[event_type][pred_name]['p_84'][i], color=percentile_calculations[event_type][pred_name]['colour'], alpha=0.4)
 
 
         self.percentile_calculations = percentile_calculations
@@ -461,7 +467,7 @@ class sensitivity_plots:
             ax.set_ylim(y_limits[0], y_limits[1])
         if x_limits is not None:
             ax.set_xlim(x_limits[0], x_limits[1])
-
+    
         plt.rcParams['xtick.labelsize'] = 10
         plt.rcParams['ytick.labelsize'] = 10 
         plt.rcParams['axes.labelsize'] = 10
@@ -473,3 +479,20 @@ class sensitivity_plots:
             return fig, ax, ax2
         else:
             return fig, ax
+        
+if __name__ == '__main__':
+        
+    df_selected = pd.read_csv('/remote/ceph/user/l/llorente/IceMix_solution_northern/pred_icemix_all_models.csv')
+    #df_selected = add_prediction_azimuth_zenith(df_selected)
+
+    database_dir = '/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/'
+    database = database_dir+'dev_northern_tracks_muon_labels_v3_part_5.db'
+
+    all_df = [df_selected]
+    all_labels = ['IceMix Raw model']
+
+    database_dir = '/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/'
+    database = database_dir + 'dev_northern_tracks_muon_labels_v3_part_5.db'
+    icemix_pred = sensitivity_plots(df_selected, ['IceMix'], database, cascades_in_dataset=False, x_pred_label='direction_y', y_pred_label='direction_x', z_pred_label = 'direction_z')
+
+    fig, ax = icemix_pred.plot_resolution_fancy(key = 'direction', include_median = True, include_energy_hist = False, step = True, y_limits=[0, 7.5])

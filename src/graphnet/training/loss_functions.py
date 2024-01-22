@@ -50,6 +50,8 @@ class LossFunction(Model):
             Loss, either averaged to a scalar (if `return_elements = False`) or
             elementwise terms with shape [N,] (if `return_elements = True`).
         """
+        if target.size(dim=1) == 1:
+            target = target.reshape(-1, 3)
         elements = self._forward(prediction, target)
         if weights is not None:
             elements = elements * weights
@@ -459,6 +461,9 @@ class VonMisesFisher3DLossNew(VonMisesFisherLoss):
         Returns:
             Elementwise von Mises-Fisher loss terms. Shape [N,]
         """
+
+        target = target.reshape(-1, 3)
+        
         sa2 = torch.sin(target[:, 0])
         ca2 = torch.cos(target[:, 0])
         sz2 = torch.sin(target[:, 1])
@@ -466,8 +471,8 @@ class VonMisesFisher3DLossNew(VonMisesFisherLoss):
         t = torch.stack([sa2 * sz2, ca2 * sz2, cz2], -1)
 
         p = prediction.float()
-        l = torch.norm(prediction.float(), dim=-1).unsqueeze(-1)
-        p = torch.cat([prediction.float() / l, l], -1)
+        #l = torch.norm(prediction.float(), dim=-1).unsqueeze(-1)
+        #p = torch.cat([prediction.float() / l, l], -1)
 
         loss = VonMisesFisher3DLoss()(p, t)
         return loss

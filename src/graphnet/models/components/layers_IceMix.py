@@ -77,7 +77,7 @@ class Extractor(nn.Module):
         charge = x.charge if Lmax is None else x.charge[:, :Lmax]
         time = x.time if Lmax is None else x.time[:, :Lmax]
         auxiliary = x.auxiliary if Lmax is None else x.auxiliary[:, :Lmax]
-        length = torch.log10(x.L0.to(dtype=pos.dtype))
+        length = torch.log10(x.n_pulses.to(dtype=pos.dtype))
 
         x = torch.cat(
             [
@@ -461,7 +461,7 @@ class ExtractorV11Scaled(nn.Module):
         charge = x["charge"] if Lmax is None else x["charge"][:, :Lmax]
         time = x["time"] if Lmax is None else x["time"][:, :Lmax]
         auxiliary = x["auxiliary"] if Lmax is None else x["auxiliary"][:, :Lmax]
-        length = torch.log10(x["L0"].to(dtype=pos.dtype))
+        length = torch.log10(x["n_pulses"].to(dtype=pos.dtype))
 
         x = torch.cat(
             [

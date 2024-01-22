@@ -474,7 +474,7 @@ class Dataset(
         L = features_array.shape[0]
         L0 = L
 
-        max_L = 768
+        max_L = 384#768
 
         if L < max_L:
             time = np.pad(time, (0, max(0, max_L - L)))
@@ -482,8 +482,6 @@ class Dataset(
             auxiliary = np.pad(auxiliary, (0, max(0, max_L - L)))
         else:
             ids = torch.randperm(L).numpy()
-            #auxiliary_n = np.where(~auxiliary)[0]
-            #auxiliary_p = np.where(auxiliary)[0]
             auxiliary_n = np.where(auxiliary == 0)[0]
             auxiliary_p = np.where(auxiliary == 1)[0]
             ids_n = ids[auxiliary_n][: min(max_L, len(auxiliary_n))]
@@ -509,27 +507,8 @@ class Dataset(
         ice_properties = np.pad(ice_properties, ((0, max(0, max_L - L)), (0, 0)))
         ice_properties = torch.from_numpy(ice_properties).float()
 
+        sensors = self._graph_definition._detector.geometry_table
 
-        sensors = pd.read_csv(os.path.join(path_ice_properties, "sensor_geometry.csv")).astype(
-            {
-                "sensor_id": np.int16,
-                "x": np.float32,
-                "y": np.float32,
-                "z": np.float32,
-            }
-        )
-        sensors["string"] = 0
-        sensors["qe"] = 0  # 1
-
-        for i in range(len(sensors) // 60):
-            start, end = i * 60, (i * 60) + 60
-            sensors.loc[start:end, "string"] = i
-
-            # High Quantum Efficiency in the lower 50 DOMs - https://arxiv.org/pdf/2209.03042.pdf (Figure 1)
-            if i in range(78, 86):
-                start_veto, end_veto = i * 60, (i * 60) + 10
-                start_core, end_core = end_veto + 1, (i * 60) + 60
-                sensors.loc[start_core:end_core, "qe"] = 1  # 1.35
         sensors_graphnet = pd.DataFrame(
             {
                 "dom_x": features_array[:,1],
@@ -544,25 +523,55 @@ class Dataset(
         qe = torch.zeros(max_L)
 
         if L0 < max_L:
-            qe[:L] = torch.from_numpy(merged_df["qe"].values).float()
+            qe[:L] = torch.from_numpy((merged_df["rde"].values - 1.0) / 0.35).float()
         else:
-            qe[:L] = torch.from_numpy(merged_df["qe"].values[ids]).float()
+            qe[:L] = torch.from_numpy((merged_df["rde"].values[ids]- 1.0) / 0.35).float()
 
+        qe_new = torch.zeros(max_L)
+        if L0 < max_L:
+            qe_new[:L] = torch.from_numpy((features_array[:,7] - 1) / 0.35).float()
+        else:
+            qe_new[:L] = torch.from_numpy((features_array[ids,7]- 1) / 0.35).float()
+
+
+        if torch.all(torch.eq(qe, qe_new)):
+            qe = qe_new
+        else:
+            print('Error')
+            print(qe)
+            print(qe_new)
+            print(torch.eq(qe, qe_new))
+            exit()
+        
         time = torch.from_numpy(time).float()
         charge = torch.from_numpy(charge).float()
         auxiliary = torch.from_numpy(auxiliary).long()
 
-        graph = Data(
-            time=torch.reshape(time, [1, max_L]),
-            charge=torch.reshape(charge, [1, max_L]),
-            pos=torch.reshape(pos, [1, max_L, 3]),
-            mask=torch.reshape(attn_mask, [1, max_L]),
-            idx=event_idx,
-            auxiliary=torch.reshape(auxiliary, [1, max_L]),
-            n_pulses=L0,
-            ice_properties=torch.reshape(ice_properties, [1, max_L, 2]),
-            qe=torch.reshape(qe, [1, max_L]),
-        )
+        reshape = True
+        if reshape:
+            graph = Data(
+                time=torch.reshape(time, [1, max_L]),
+                charge=torch.reshape(charge, [1, max_L]),
+                pos=torch.reshape(pos, [1, max_L, 3]),
+                mask=torch.reshape(attn_mask, [1, max_L]),
+                idx=event_idx,
+                auxiliary=torch.reshape(auxiliary, [1, max_L]),
+                n_pulses=L0,
+                ice_properties=torch.reshape(ice_properties, [1, max_L, 2]),
+                qe=torch.reshape(qe, [1, max_L]),
+            )
+        else:
+            graph = Data(
+                time=time,
+                charge=charge,
+                pos=pos,
+                mask=attn_mask,
+                idx=event_idx,
+                auxiliary=auxiliary,
+                n_pulses=L0,
+                ice_properties=ice_properties,
+                qe=qe,
+            )
 
         for key,value in zip(self._truth, truth):
             graph[key] = torch.tensor(value)

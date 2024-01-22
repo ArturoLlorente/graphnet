@@ -4,14 +4,12 @@ import pandas as pd
 from tqdm.auto import tqdm
 import torch
 import pickle
-from torch.optim import AdamW
-from torch.optim.lr_scheduler import ReduceLROnPlateau, OneCycleLR
+from torch.optim import AdamW, Adam
+from torch.optim.lr_scheduler import OneCycleLR
 
 from pytorch_lightning.callbacks import (
     ModelCheckpoint,
     GradientAccumulationScheduler,
-    LearningRateMonitor,
-    EarlyStopping,
 )
 
 from pytorch_lightning.loggers import WandbLogger
@@ -19,32 +17,31 @@ from pytorch_lightning.loggers import WandbLogger
 from graphnet.data.dataset import EnsembleDataset
 from graphnet.data.dataset import SQLiteDataset
 from graphnet.data.constants import FEATURES, TRUTH
-from graphnet.models import StandardModel, StandardModelPred
+from graphnet.models import StandardModel, StandardAverageModel
 from graphnet.models.graphs import KNNGraph
-from graphnet.models.gnn import DynEdgeTITO
 from graphnet.models.graphs.nodes import NodesAsPulses
 from graphnet.models.task.reconstruction import DirectionReconstructionWithKappa
 from graphnet.training.labels import Direction
-from graphnet.training.loss_functions import VonMisesFisher3DLoss, LossFunction, VonMisesFisher3DLossNew
-from graphnet.training.callbacks import ProgressBar, PiecewiseLinearLR, EMACallback, SWACallback
+from graphnet.training.loss_functions import VonMisesFisher3DLoss
+from graphnet.training.callbacks import ProgressBar
 from graphnet.training.utils import make_dataloader
 from graphnet.training.utils import collate_fn, collator_sequence_buckleting
 
-from typing import Dict, List, Optional, Union, Callable, Any
+from typing import Dict, List, Optional, Union, Any
 from torch.utils.data import DataLoader
 
 from graphnet.models.detector.detector import Detector
 from graphnet.models.detector.icecube import IceCube86
-from graphnet.models.task import Task
 
-sys.path.insert(0, "/remote/ceph/user/l/llorente/")
-from graphnet.models.gnn import DeepIceModel, EncoderWithDirectionReconstructionV22, EncoderWithDirectionReconstructionV23
+
+#sys.path.insert(0, "/remote/ceph/user/l/llorente/")
+from graphnet.models.gnn import DeepIceModel, EncoderWithDirectionReconstruction
 
 MODELS = {'model1': DeepIceModel(dim=768, dim_base=192, depth=12, head_size=32),
         'model2': DeepIceModel(dim=768, dim_base=192, depth=12, head_size=64),
         'model3': DeepIceModel(dim=768, dim_base=192, depth=12, head_size=32, n_rel=4),
-        'model4': EncoderWithDirectionReconstructionV22(dim=384, dim_base=128, depth=8, head_size=32),
-        'model5': EncoderWithDirectionReconstructionV23(dim=768, dim_base=192, depth=12, head_size=64)}
+        'model4': EncoderWithDirectionReconstruction(dim=384, dim_base=128, depth=8, head_size=32, knn_features=3),
+        'model5': EncoderWithDirectionReconstruction(dim=768, dim_base=192, depth=12, head_size=64, knn_features=4)}
 
 MODEL_PATH = {'model1': '/remote/ceph/user/l/llorente/icecube_2nd_place/ice-cube-final-models/baselineV3_BE_globalrel_d32_0_6ema.pth',
             'model2': '/remote/ceph/user/l/llorente/icecube_2nd_place/ice-cube-final-models/baselineV3_BE_globalrel_d64_0_3emaFT_2.pth',
@@ -171,13 +168,13 @@ def build_model(
         task = DirectionReconstructionWithKappa(
             hidden_size=384,
             target_labels="direction",
-            loss_function=VonMisesFisher3DLossNew,
+            loss_function=VonMisesFisher3DLoss(),
         )
     else:
         task = DirectionReconstructionWithKappa(
             hidden_size=768,
             target_labels="direction",
-            loss_function=VonMisesFisher3DLossNew,
+            loss_function=VonMisesFisher3DLoss(),
         )
 
     model_kwargs = {
@@ -191,7 +188,15 @@ def build_model(
         "scheduler_config": config["scheduler_config"],
     }
     
-    model = StandardModel(**model_kwargs)
+    if config["swa_starting_epoch"]:
+        model_kwargs["swa_starting_epoch"] = config["swa_starting_epoch"]
+    if config["ema_decay"]:
+        model_kwargs["ema_decay"] = config["ema_decay"]
+    
+    if config["swa_starting_epoch"] or config["ema_decay"]:
+        model = StandardAverageModel(**model_kwargs)
+    else:
+        model = StandardModel(**model_kwargs)
 
     model.prediction_columns = config["prediction_columns"]
     model.additional_attributes = config["additional_attributes"]
@@ -296,16 +301,13 @@ if __name__ == "__main__":
         "weight_column_name": None,
         "weight_table_name": None,
         "batch_size": 100,
-        "early_stopping_patience": 15,
-        "num_workers": 4,
+        "num_workers": 16,
         "pulsemap": "InIceDSTPulses",
         "truth_table": "truth",
         "index_column": "event_no",
         "labels": {"direction": Direction()},
         "global_pooling_schemes": ["max"],
-        "train_max_pulses": 2020,
-        "val_max_pulses": 3000,
-        "num_database_files": 8,
+        "num_database_files": 2,
         "node_truth_table": None,
         "node_truth": None,
         "string_selection": None,
@@ -315,50 +317,41 @@ if __name__ == "__main__":
         "detector": IceCube86(),
         "node_definition": NodesAsPulses(),
         "nb_nearest_neighbours": 6,
-        "features": ["dom_x", "dom_y", "dom_z", "dom_time", "charge", "hlc"],
+        "features": ["dom_x", "dom_y", "dom_z", "dom_time", "charge", "hlc", "rde"],
         "truth": ["energy", "energy_track", "position_x", "position_y", "position_z", "azimuth", "zenith", "pid", "elasticity", "interaction_type", "interaction_time"],
         "columns_nearest_neighbours": [0, 1, 2],
         "collate_fn": collator_sequence_buckleting([0.8]),
-        "prediction_columns": [
-            "dir_x_pred",
-            "dir_y_pred",
-            "dir_z_pred",
-            "dir_kappa_pred",
-        ],
-        "fit": {
-            "max_epochs": 5,
-            "gpus": [2],
-            "check_val_every_n_epoch": 1,
-        },
+        "prediction_columns": ["dir_x_pred", "dir_y_pred", "dir_z_pred", "dir_kappa_pred"],
+        "fit": {"max_epochs": 1, "gpus": [0], "precision": '16-mixed'},
         "optimizer_class": AdamW,
-        "optimizer_kwargs": {"lr": 1e-5, "weight_decay": 0.05},
+        "optimizer_kwargs": {"lr": 2e-5, "weight_decay": 0.05, "eps": 1e-7},
         "scheduler_class": OneCycleLR,
-        "scheduler_kwargs": {"max_lr": 1e-5, "pct_start": 0.01, "div_factor": 25, "final_div_factor": 25, "epochs": 8},
-        "scheduler_config": {"frequency": 1, "monitor": "val_loss"},
+        "scheduler_kwargs": {"max_lr": 2e-5, "pct_start": 0.01, "anneal_strategy": 'cos', "div_factor": 25, "final_div_factor": 25, "verbose": True},
+        "scheduler_config": {"frequency": 1, "monitor": "val_loss", "interval": "step"},
         "wandb": False,
-        "EMA": False,
-        "SWA_starting_epoch": 2,
-        "ckpt_path": False#"/remote/ceph/user/l/llorente/tito_northern_retrain/model_checkpoint_graphnet/model5_retrain_dynedgeTITO_directionReco_500e_trainMaxPulses2020_valMaxPulses3000_batch325_numDatabaseFiles8_optimizer_<class 'torch.optim.adam.Adam'>_25_11-epoch=55-val_loss=-2.637405.ckpt",
+        "ema_decay": 0.9998,
+        "swa_starting_epoch": 0,
+        "ckpt_path": False
     }
     config["additional_attributes"] = [ "zenith", "azimuth", config["index_column"], "energy"]
     INFERENCE = False
     model_name = "model1"
 
-    config['retrain_from_checkpoint'] = False
+    config['retrain_from_checkpoint'] = MODEL_PATH[model_name]
 
     if len(config["fit"]["gpus"]) > 1:
         config["fit"]["distribution_strategy"] = "ddp"
 
     run_name = (
         f"test"
-        #f"{MODEL}_retrain_dynedgeTITO_directionReco_{config['fit']['max_epochs']}e_trainMaxPulses{config['train_max_pulses']}_"
+        #f"{MODEL}_retrain_IceMix_{config['fit']['max_epochs']}e_trainMaxPulses{config['train_max_pulses']}_"
         #f"valMaxPulses{config['val_max_pulses']}_batch{config['batch_size']}_numDatabaseFiles{config['num_database_files']}_"
         #f"optimizer_{config['optimizer_class']}_25_11"
     )
 
     # Configurations
     torch.multiprocessing.set_sharing_strategy("file_system")
-    # torch.multiprocessing.set_start_method('spawn', force=True)
+    #torch.multiprocessing.set_start_method('spawn', force=True)
 
     db_dir = "/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/"
     sel_dir = "/remote/ceph/user/l/llorente/northern_track_selection/"
@@ -374,7 +367,7 @@ if __name__ == "__main__":
             all_databases.append(
                 db_dir + f"dev_northern_tracks_muon_labels_v3_part_{idx}.db"
             )
-            all_selections.append(pd.read_csv(sel_dir + f"part_{idx}.csv"))
+            all_selections.append(pd.read_csv(sel_dir + f"part_{idx}.csv"))          
     # get_list_of_databases:
     train_selections = []
     for selection in all_selections:
@@ -408,10 +401,13 @@ if __name__ == "__main__":
             config=config,
         )
 
+        if config["scheduler_kwargs"]:
+            config["scheduler_kwargs"]["steps_per_epoch"] = len(training_dataloader)
+            config["scheduler_kwargs"]["epochs"] = config["fit"]["max_epochs"]
+
         callbacks = [
-            EarlyStopping(monitor="val_loss", patience=config["early_stopping_patience"]),
             ProgressBar(),
-            GradientAccumulationScheduler(scheduling={0: 4096//config["batch_size"]}),
+            GradientAccumulationScheduler(scheduling={0: 2048//config["batch_size"]}),
             # LearningRateMonitor(logging_interval='step'),
         ]
         if validation_dataloader is not None:
@@ -425,8 +421,6 @@ if __name__ == "__main__":
                     save_weights_only=False,
                 )
             )
-        if config["EMA"]:
-            callbacks.append(EMACallback())
     
     if not INFERENCE:
         model = build_model(gnn_model=MODELS[model_name], config=config)
@@ -440,23 +434,20 @@ if __name__ == "__main__":
             if "state_dict" in checkpoint:
                 checkpoint = checkpoint["state_dict"]
             new_checkpoint = {('_tasks.0._affine.weight' if k == 'proj_out.weight' else '_tasks.0._affine.bias' if k == 'proj_out.bias' else '_gnn.' + k): v for k, v in checkpoint.items()}
-            model.load_state_dict(new_checkpoint)
+            model.load_state_dict(new_checkpoint, strict=False)
             del checkpoint, new_checkpoint
         if validation_dataloader is not None:
             config["fit"]["val_dataloader"] = validation_dataloader
-            
-        if config["SWA_starting_epoch"]:
-            callbacks.append(SWACallback(swa_start_epoch=config["SWA_starting_epoch"]))
 
         model.fit(
             training_dataloader,
             callbacks=callbacks,
             **config["fit"],
         )
-        model.save(os.path.join(config["archive"], f"{run_name}.pth"))
-        model.save_state_dict(
-            os.path.join(config["archive"], f"{run_name}_state_dict.pth")
-        )
+        #model.save(os.path.join(config["archive"], f"{run_name}.pth"))
+        #model.save_state_dict(
+        #    os.path.join(config["archive"], f"{run_name}_state_dict.pth")
+        #)
         print(f"Model saved to {config['archive']}/{run_name}.pth")
     else:
 
@@ -467,7 +458,7 @@ if __name__ == "__main__":
         all_res = []
         #checkpoint_path = f"/remote/ceph/user/l/llorente/icecube_2nd_place/ice-cube-final-models/baselineV3_BE_globalrel_d64_0_3emaFT_2.pth"
         #torch.multiprocessing.set_start_method("spawn", force=True)
-        run_name_pred = f"pred_icemix_all_models"
+        run_name_pred = f"pred_icemix_all_models_i"
         
         factor = 1
         pulse_breakpoints = [0, 100, 200, 300, 500, 1000, 1500, 3000]  # 10000]

@@ -11,6 +11,7 @@ from timm.models.layers import trunc_normal_
 
 from torch_geometric.nn.pool import knn_graph
 from torch_geometric.utils import to_dense_batch
+from torch_geometric.data import Data
 
 
 class DeepIceModel(nn.Module):
@@ -159,6 +160,7 @@ class EncoderWithDirectionReconstruction(nn.Module):
             9,
             post_processing_layer_sizes=[336, dim // 2],
             dynedge_layer_sizes=[(128, 256), (336, 256), (336, 256), (336, 256)],
+            icemix_encoder=True,
         )
         self.apply(self._init_weights)
         trunc_normal_(self.cls_token.weight, std=0.02)
@@ -212,22 +214,22 @@ class EncoderWithDirectionReconstruction(nn.Module):
         Lmax = mask.sum(-1).max()
         x = self.extractor(x0, Lmax)
         rel_pos_bias, rel_enc = self.rel_pos(x0, Lmax)
-        # nbs = get_nbs(x0, Lmax)
+
         mask = mask[:, :Lmax]
-        batch_index = mask.nonzero()[:, 0]
-        edge_index = knn_graph(x=graph_feature[:, :self.knn_features], k=8, batch=batch_index).to(
+        batch = mask.nonzero()[:, 0]
+        edge_index = knn_graph(x=graph_feature[:, :self.knn_features], k=8, batch=batch).to(
             mask.device
         )
         graph_feature = self.local_root(
-            graph_feature, edge_index, batch_index, x0.n_pulses
+            Data(x=graph_feature, edge_index=edge_index, batch=batch, n_pulses=x0.n_pulses)
         )
-        graph_feature, _ = to_dense_batch(graph_feature, batch_index)
+        graph_feature, _ = to_dense_batch(graph_feature, batch)
 
         B, _ = mask.shape
         attn_mask = torch.zeros(mask.shape, device=mask.device)
         attn_mask[~mask] = -torch.inf
         x = torch.cat([x, graph_feature], 2)
-
+        
         for blk in self.sandwich:
             x = blk(x, attn_mask, rel_pos_bias)
             if self.knn_features == 3:

@@ -21,7 +21,7 @@ from graphnet.models import StandardModel, StandardAverageModel
 from graphnet.models.graphs import KNNGraph
 from graphnet.models.graphs.nodes import NodesAsPulses
 from graphnet.models.task.reconstruction import DirectionReconstructionWithKappa
-from graphnet.training.labels import Direction
+from graphnet.training.labels import Direction, Direction_flipped
 from graphnet.training.loss_functions import VonMisesFisher3DLoss
 from graphnet.training.callbacks import ProgressBar
 from graphnet.training.utils import make_dataloader
@@ -188,15 +188,19 @@ def build_model(
         "scheduler_config": config["scheduler_config"],
     }
     
-    if config["swa_starting_epoch"]:
-        model_kwargs["swa_starting_epoch"] = config["swa_starting_epoch"]
-    if config["ema_decay"]:
-        model_kwargs["ema_decay"] = config["ema_decay"]
-    
-    if config["swa_starting_epoch"] or config["ema_decay"]:
-        model = StandardAverageModel(**model_kwargs)
-    else:
+    if INFERENCE:
         model = StandardModel(**model_kwargs)
+    else:
+        if isinstance(config["swa_starting_epoch"], int):
+            model_kwargs["swa_starting_epoch"] = config["swa_starting_epoch"]
+        if config["ema_decay"]:
+            model_kwargs["ema_decay"] = config["ema_decay"]
+        
+        if config["swa_starting_epoch"] or config["ema_decay"]:
+            model = StandardAverageModel(**model_kwargs)
+        else:
+            model = StandardModel(**model_kwargs)
+        
 
     model.prediction_columns = config["prediction_columns"]
     model.additional_attributes = config["additional_attributes"]
@@ -205,6 +209,7 @@ def build_model(
 
 
 def inference(
+    model_name: str,
     device: int,
     checkpoint_path: str,
     test_min_pulses: int,
@@ -236,24 +241,37 @@ def inference(
         labels=config["labels"],
     )
 
-    #model = build_model(config)
-
     cuda_device = f"cuda:{device[0]}" if len(device)>0 else "cpu"
     models, weights = [], []
-    for i in range(1,6):
-        model = build_model(gnn_model=MODELS[f"model{i}"], config=config)
+    if model_name == "all":
+        for i in range(1,6):
+            model = build_model(gnn_model=MODELS[f"model{i}"], config=config)
+            model.eval()
+            model.inference()
+            checkpoint_path = MODEL_PATH[f"model{i}"]
+            checkpoint = torch.load(checkpoint_path, torch.device("cpu"))
+            if "state_dict" in checkpoint:
+                checkpoint = checkpoint["state_dict"]
+            new_checkpoint = {('_tasks.0._affine.weight' if k == 'proj_out.weight' else '_tasks.0._affine.bias' if k == 'proj_out.bias' else '_gnn.' + k): v for k, v in checkpoint.items()}
+
+            model.load_state_dict(new_checkpoint)
+            model.to(cuda_device)
+            models.append(model)
+            weights.append(MODEL_WEIGHTS[f"model{i}"])
+    else:
+        model = build_model(gnn_model=MODELS[model_name], config=config)
         model.eval()
         model.inference()
-        checkpoint_path = MODEL_PATH[f"model{i}"]
         checkpoint = torch.load(checkpoint_path, torch.device("cpu"))
+
         if "state_dict" in checkpoint:
             checkpoint = checkpoint["state_dict"]
-        new_checkpoint = {('_tasks.0._affine.weight' if k == 'proj_out.weight' else '_tasks.0._affine.bias' if k == 'proj_out.bias' else '_gnn.' + k): v for k, v in checkpoint.items()}
-
+        #new_checkpoint = {('_tasks.0._affine.weight' if k == 'proj_out.weight' else '_tasks.0._affine.bias' if k == 'proj_out.bias' else '_gnn.' + k): v for k, v in checkpoint.items()} #kaggle weights
+        new_checkpoint = {('_tasks.0._affine.weight' if k == 'proj_out.weight' else '_tasks.0._affine.bias' if k == 'proj_out.bias' else k): v for k, v in checkpoint.items()}
         model.load_state_dict(new_checkpoint)
         model.to(cuda_device)
         models.append(model)
-        weights.append(MODEL_WEIGHTS[f"model{i}"])
+        weights.append(1)
         
     weights = torch.FloatTensor(weights)
     weights /= weights.sum()
@@ -300,14 +318,14 @@ if __name__ == "__main__":
         "target": "direction",
         "weight_column_name": None,
         "weight_table_name": None,
-        "batch_size": 100,
-        "num_workers": 16,
+        "batch_size": 85,
+        "num_workers": 32,
         "pulsemap": "InIceDSTPulses",
         "truth_table": "truth",
         "index_column": "event_no",
-        "labels": {"direction": Direction()},
+        "labels": {"direction": Direction_flipped()},
         "global_pooling_schemes": ["max"],
-        "num_database_files": 2,
+        "num_database_files": 8,
         "node_truth_table": None,
         "node_truth": None,
         "string_selection": None,
@@ -322,11 +340,11 @@ if __name__ == "__main__":
         "columns_nearest_neighbours": [0, 1, 2],
         "collate_fn": collator_sequence_buckleting([0.8]),
         "prediction_columns": ["dir_x_pred", "dir_y_pred", "dir_z_pred", "dir_kappa_pred"],
-        "fit": {"max_epochs": 1, "gpus": [0], "precision": '16-mixed'},
+        "fit": {"max_epochs": 1, "gpus": [3], "precision": '16-mixed'},
         "optimizer_class": AdamW,
         "optimizer_kwargs": {"lr": 2e-5, "weight_decay": 0.05, "eps": 1e-7},
         "scheduler_class": OneCycleLR,
-        "scheduler_kwargs": {"max_lr": 2e-5, "pct_start": 0.01, "anneal_strategy": 'cos', "div_factor": 25, "final_div_factor": 25, "verbose": True},
+        "scheduler_kwargs": {"max_lr": 2e-5, "pct_start": 0.01, "anneal_strategy": 'cos', "div_factor": 25, "final_div_factor": 25},
         "scheduler_config": {"frequency": 1, "monitor": "val_loss", "interval": "step"},
         "wandb": False,
         "ema_decay": 0.9998,
@@ -335,23 +353,22 @@ if __name__ == "__main__":
     }
     config["additional_attributes"] = [ "zenith", "azimuth", config["index_column"], "energy"]
     INFERENCE = False
-    model_name = "model1"
+    model_name = "model5"
 
     config['retrain_from_checkpoint'] = MODEL_PATH[model_name]
 
-    if len(config["fit"]["gpus"]) > 1:
-        config["fit"]["distribution_strategy"] = "ddp"
+    if config["swa_starting_epoch"] is not None:
+        config["fit"]["distribution_strategy"] = 'ddp_find_unused_parameters_true'
+    else:
+        config["fit"]["distribution_strategy"] = 'ddp'
 
     run_name = (
-        f"test"
-        #f"{MODEL}_retrain_IceMix_{config['fit']['max_epochs']}e_trainMaxPulses{config['train_max_pulses']}_"
-        #f"valMaxPulses{config['val_max_pulses']}_batch{config['batch_size']}_numDatabaseFiles{config['num_database_files']}_"
-        #f"optimizer_{config['optimizer_class']}_25_11"
+        f"{model_name}_retrain_IceMix__batch{config['batch_size']}_optimizer_AdamW_LR{config['scheduler_kwargs']['max_lr']}_annealStrat_{config['scheduler_kwargs']['anneal_strategy']}_"
+        f"ema_decay_{config['ema_decay']}__23_01"
     )
 
     # Configurations
     torch.multiprocessing.set_sharing_strategy("file_system")
-    #torch.multiprocessing.set_start_method('spawn', force=True)
 
     db_dir = "/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/"
     sel_dir = "/remote/ceph/user/l/llorente/northern_track_selection/"
@@ -407,8 +424,7 @@ if __name__ == "__main__":
 
         callbacks = [
             ProgressBar(),
-            GradientAccumulationScheduler(scheduling={0: 2048//config["batch_size"]}),
-            # LearningRateMonitor(logging_interval='step'),
+            GradientAccumulationScheduler(scheduling={0: 4096//config["batch_size"]}),
         ]
         if validation_dataloader is not None:
             callbacks.append(
@@ -444,26 +460,29 @@ if __name__ == "__main__":
             callbacks=callbacks,
             **config["fit"],
         )
-        #model.save(os.path.join(config["archive"], f"{run_name}.pth"))
-        #model.save_state_dict(
-        #    os.path.join(config["archive"], f"{run_name}_state_dict.pth")
-        #)
+        
+        #save config into a file
+        with open(os.path.join(config["archive"], f"{run_name}_config.pkl"), "wb") as f:
+            pickle.dump(config, f)
+            
+        model.save(os.path.join(config["archive"], f"{run_name}.pth"))
+        model.save_state_dict(
+            os.path.join(config["archive"], f"{run_name}_state_dict.pth")
+        )
         print(f"Model saved to {config['archive']}/{run_name}.pth")
     else:
 
-        models = []
-        for i in range(1,6):
-            models.append(build_model(gnn_model=MODELS[f"model{i}"], config=config))
-
         all_res = []
-        #checkpoint_path = f"/remote/ceph/user/l/llorente/icecube_2nd_place/ice-cube-final-models/baselineV3_BE_globalrel_d64_0_3emaFT_2.pth"
+        checkpoint_path = '/remote/ceph/user/l/llorente/icemix_northern_retrain/model5_retrain_IceMix__batch85_optimizer_AdamW_LR2e-05_annealStrat_cos_ema_decay_0.9998__23_01_state_dict.pth'
         #torch.multiprocessing.set_start_method("spawn", force=True)
-        run_name_pred = f"pred_icemix_all_models_i"
+        run_name_pred = f"pred_icemix_model5_test_retrain"
         
         factor = 1
         pulse_breakpoints = [0, 100, 200, 300, 500, 1000, 1500, 3000]  # 10000]
-        batch_sizes_per_pulse = [2000, 750, 350, 150, 35,4,1]#[1800, 175, 40, 11, 4]  # 5, 2]
+        batch_sizes_per_pulse = [1800, 750, 350, 150, 35,4,1]#[1800, 175, 40, 11, 4]  # 5, 2]
         config["num_workers"] = 16
+        
+        test_selection = test_selection[:int(len(test_selection)*0.01)]
 
         for min_pulse, max_pulse in zip(
             pulse_breakpoints[:-1], pulse_breakpoints[1:]
@@ -476,13 +495,14 @@ if __name__ == "__main__":
                 results = pickle.load(open(pred_checkpoint_path, "rb"))
             else:
                 results = inference(
+                    model_name = model_name,
                     device=config["fit"]["gpus"],
                     test_min_pulses=min_pulse,
                     test_max_pulses=max_pulse,
                     batch_size=int(
                         factor * batch_sizes_per_pulse[pulse_breakpoints.index(max_pulse) - 1]
                     ),
-                    checkpoint_path=None,
+                    checkpoint_path=checkpoint_path,
                     test_path=test_database,
                     test_selection_file=test_selection,
                     config=config,

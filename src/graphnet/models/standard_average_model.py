@@ -55,7 +55,7 @@ class StandardAverageModel(StandardModel):
         if ema_decay is not None:
             averaged_model_kwargs["multi_avg_fn"] = get_ema_multi_avg_fn(ema_decay)
             
-        if swa_starting_epoch is not None:
+        if swa_starting_epoch is None:
             self._swa_starting_epoch = 0
         else:
             self._swa_starting_epoch = swa_starting_epoch
@@ -115,14 +115,9 @@ class StandardAverageModel(StandardModel):
     def on_train_end(self) -> None:
         """Update the model parameters with the Averaged ones."""
         # Update bn statistics for the swa_model at the end
-        update_bn(self.train_dataloader(), self._averaged_model)
+        update_bn(self.trainer.train_dataloader, self._averaged_model)
         
-        self.load_state_dict(self._averaged_model.module.state_dict())
-        
-    def load_original_weights(self, path: str):
-        """Load the weights of the original model."""
-        # Load the state dictionary from the specified path
-        state_dict = path#torch.load(path)
-        
-        # Load the state dictionary into the model
-        self.load_state_dict(state_dict)
+        average_model_state_dict = self._averaged_model.module.state_dict()
+        del self._averaged_model
+        # Update the model parameters with the Averaged ones
+        self.load_state_dict(average_model_state_dict)

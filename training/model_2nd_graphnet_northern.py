@@ -266,8 +266,8 @@ def inference(
 
         if "state_dict" in checkpoint:
             checkpoint = checkpoint["state_dict"]
-        #new_checkpoint = {('_tasks.0._affine.weight' if k == 'proj_out.weight' else '_tasks.0._affine.bias' if k == 'proj_out.bias' else '_gnn.' + k): v for k, v in checkpoint.items()} #kaggle weights
-        new_checkpoint = {('_tasks.0._affine.weight' if k == 'proj_out.weight' else '_tasks.0._affine.bias' if k == 'proj_out.bias' else k): v for k, v in checkpoint.items()}
+        new_checkpoint = {('_tasks.0._affine.weight' if k == 'proj_out.weight' else '_tasks.0._affine.bias' if k == 'proj_out.bias' else '_gnn.' + k): v for k, v in checkpoint.items()} #kaggle weights
+        #new_checkpoint = {('_tasks.0._affine.weight' if k == 'proj_out.weight' else '_tasks.0._affine.bias' if k == 'proj_out.bias' else k): v for k, v in checkpoint.items()}
         model.load_state_dict(new_checkpoint)
         model.to(cuda_device)
         models.append(model)
@@ -363,8 +363,8 @@ if __name__ == "__main__":
         config["fit"]["distribution_strategy"] = 'ddp'
 
     run_name = (
-        f"{model_name}_retrain_IceMix__batch{config['batch_size']}_optimizer_AdamW_LR{config['scheduler_kwargs']['max_lr']}_annealStrat_{config['scheduler_kwargs']['anneal_strategy']}_"
-        f"ema_decay_{config['ema_decay']}__23_01"
+        f"{model_name}_retrain_IceMix_2Epoch_batch{config['batch_size']}_optimizer_AdamW_LR{config['scheduler_kwargs']['max_lr']}_annealStrat_{config['scheduler_kwargs']['anneal_strategy']}_"
+        f"ema_decay_{config['ema_decay']}"
     )
 
     # Configurations
@@ -473,16 +473,15 @@ if __name__ == "__main__":
     else:
 
         all_res = []
-        checkpoint_path = '/remote/ceph/user/l/llorente/icemix_northern_retrain/model5_retrain_IceMix__batch85_optimizer_AdamW_LR2e-05_annealStrat_cos_ema_decay_0.9998__23_01_state_dict.pth'
-        #torch.multiprocessing.set_start_method("spawn", force=True)
-        run_name_pred = f"pred_icemix_model5_test_retrain"
+        checkpoint_path = MODEL_PATH["model5"]#'/remote/ceph/user/l/llorente/icemix_northern_retrain/model5_retrain_IceMix__batch85_optimizer_AdamW_LR2e-05_annealStrat_cos_ema_decay_0.9998__23_01_state_dict.pth'
+        run_name_pred = f"pred_icemix_model5_baseline_full"
         
         factor = 1
         pulse_breakpoints = [0, 100, 200, 300, 500, 1000, 1500, 3000]  # 10000]
-        batch_sizes_per_pulse = [1800, 750, 350, 150, 35,4,1]#[1800, 175, 40, 11, 4]  # 5, 2]
+        batch_sizes_per_pulse = [1800, 750, 350, 150, 35,30,30]#[1800, 175, 40, 11, 4]  # 5, 2]
         config["num_workers"] = 16
         
-        test_selection = test_selection[:int(len(test_selection)*0.01)]
+        #test_selection = test_selection[:int(len(test_selection)*0.01)]
 
         for min_pulse, max_pulse in zip(
             pulse_breakpoints[:-1], pulse_breakpoints[1:]
@@ -499,9 +498,9 @@ if __name__ == "__main__":
                     device=config["fit"]["gpus"],
                     test_min_pulses=min_pulse,
                     test_max_pulses=max_pulse,
-                    batch_size=int(
+                    batch_size=max(int(
                         factor * batch_sizes_per_pulse[pulse_breakpoints.index(max_pulse) - 1]
-                    ),
+                    ), 1),
                     checkpoint_path=checkpoint_path,
                     test_path=test_database,
                     test_selection_file=test_selection,

@@ -340,7 +340,7 @@ if __name__ == "__main__":
         "columns_nearest_neighbours": [0, 1, 2],
         "collate_fn": collator_sequence_buckleting([0.8]),
         "prediction_columns": ["dir_x_pred", "dir_y_pred", "dir_z_pred", "dir_kappa_pred"],
-        "fit": {"max_epochs": 1, "gpus": [3], "precision": '16-mixed'},
+        "fit": {"max_epochs": 1, "gpus": [2], "precision": '16-mixed'},
         "optimizer_class": AdamW,
         "optimizer_kwargs": {"lr": 2e-5, "weight_decay": 0.05, "eps": 1e-7},
         "scheduler_class": OneCycleLR,
@@ -352,7 +352,7 @@ if __name__ == "__main__":
         "ckpt_path": False
     }
     config["additional_attributes"] = [ "zenith", "azimuth", config["index_column"], "energy"]
-    INFERENCE = False
+    INFERENCE = True
     model_name = "model5"
 
     config['retrain_from_checkpoint'] = MODEL_PATH[model_name]
@@ -363,8 +363,8 @@ if __name__ == "__main__":
         config["fit"]["distribution_strategy"] = 'ddp'
 
     run_name = (
-        f"{model_name}_retrain_IceMix_2Epoch_batch{config['batch_size']}_optimizer_AdamW_LR{config['scheduler_kwargs']['max_lr']}_annealStrat_{config['scheduler_kwargs']['anneal_strategy']}_"
-        f"ema_decay_{config['ema_decay']}"
+        f"{model_name}_retrain_IceMix_batch{config['batch_size']}_optimizer_AdamW_LR{config['scheduler_kwargs']['max_lr']}_annealStrat_{config['scheduler_kwargs']['anneal_strategy']}_"
+        f"ema_decay_{config['ema_decay']}_new_dataset_definition_26_01"
     )
 
     # Configurations

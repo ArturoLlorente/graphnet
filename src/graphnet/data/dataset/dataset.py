@@ -480,6 +480,7 @@ class Dataset(
             time = np.pad(time, (0, max(0, max_L - L)))
             charge = np.pad(charge, (0, max(0, max_L - L)))
             auxiliary = np.pad(auxiliary, (0, max(0, max_L - L)))
+            pos_L = torch.from_numpy(features_array[:,1:4]/500)
         else:
             ids = torch.randperm(L).numpy()
             auxiliary_n = np.where(auxiliary == 0)[0]
@@ -491,11 +492,12 @@ class Dataset(
             time = time[ids]
             charge = charge[ids]
             auxiliary = auxiliary[ids]
+            pos_L = torch.from_numpy(features_array[ids,1:4]/500)
             L = len(ids)
 
         attn_mask = torch.zeros(max_L, dtype=torch.bool)
         attn_mask[:L] = True
-        pos_L = torch.from_numpy(features_array[:,1:4]/500)
+        
         pos = torch.zeros(max_L, 3)
         pos[:L] = pos_L[:L]
 

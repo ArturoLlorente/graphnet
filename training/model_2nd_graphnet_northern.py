@@ -164,7 +164,7 @@ def build_model(
 
     gnn = gnn_model
 
-    if gnn_model._get_name() == "EncoderWithDirectionReconstructionV22":
+    if config["model_name"] == "model4":
         task = DirectionReconstructionWithKappa(
             hidden_size=384,
             target_labels="direction",
@@ -245,6 +245,7 @@ def inference(
     models, weights = [], []
     if model_name == "all":
         for i in range(1,6):
+            config["model_name"] = f"model{i}"
             model = build_model(gnn_model=MODELS[f"model{i}"], config=config)
             model.eval()
             model.inference()
@@ -266,8 +267,8 @@ def inference(
 
         if "state_dict" in checkpoint:
             checkpoint = checkpoint["state_dict"]
-        new_checkpoint = {('_tasks.0._affine.weight' if k == 'proj_out.weight' else '_tasks.0._affine.bias' if k == 'proj_out.bias' else '_gnn.' + k): v for k, v in checkpoint.items()} #kaggle weights
-        #new_checkpoint = {('_tasks.0._affine.weight' if k == 'proj_out.weight' else '_tasks.0._affine.bias' if k == 'proj_out.bias' else k): v for k, v in checkpoint.items()}
+        #new_checkpoint = {('_tasks.0._affine.weight' if k == 'proj_out.weight' else '_tasks.0._affine.bias' if k == 'proj_out.bias' else '_gnn.' + k): v for k, v in checkpoint.items()} #kaggle weights
+        new_checkpoint = {('_tasks.0._affine.weight' if k == 'proj_out.weight' else '_tasks.0._affine.bias' if k == 'proj_out.bias' else k): v for k, v in checkpoint.items()}
         model.load_state_dict(new_checkpoint)
         model.to(cuda_device)
         models.append(model)
@@ -318,7 +319,7 @@ if __name__ == "__main__":
         "target": "direction",
         "weight_column_name": None,
         "weight_table_name": None,
-        "batch_size": 85,
+        "batch_size": 32,
         "num_workers": 32,
         "pulsemap": "InIceDSTPulses",
         "truth_table": "truth",
@@ -339,7 +340,7 @@ if __name__ == "__main__":
         "truth": ["energy", "energy_track", "position_x", "position_y", "position_z", "azimuth", "zenith", "pid", "elasticity", "interaction_type", "interaction_time"],
         "columns_nearest_neighbours": [0, 1, 2],
         "collate_fn": collator_sequence_buckleting([0.8]),
-        "prediction_columns": ["dir_x_pred", "dir_y_pred", "dir_z_pred", "dir_kappa_pred"],
+        "prediction_columns": ["dir_y_pred", "dir_x_pred", "dir_z_pred", "dir_kappa_pred"],
         "fit": {"max_epochs": 1, "gpus": [2], "precision": '16-mixed'},
         "optimizer_class": AdamW,
         "optimizer_kwargs": {"lr": 2e-5, "weight_decay": 0.05, "eps": 1e-7},
@@ -349,10 +350,11 @@ if __name__ == "__main__":
         "wandb": False,
         "ema_decay": 0.9998,
         "swa_starting_epoch": 0,
-        "ckpt_path": False
+        "ckpt_path": False,
+        "model_name": None,
     }
     config["additional_attributes"] = [ "zenith", "azimuth", config["index_column"], "energy"]
-    INFERENCE = True
+    INFERENCE = False
     model_name = "model5"
 
     config['retrain_from_checkpoint'] = MODEL_PATH[model_name]
@@ -364,7 +366,7 @@ if __name__ == "__main__":
 
     run_name = (
         f"{model_name}_retrain_IceMix_batch{config['batch_size']}_optimizer_AdamW_LR{config['scheduler_kwargs']['max_lr']}_annealStrat_{config['scheduler_kwargs']['anneal_strategy']}_"
-        f"ema_decay_{config['ema_decay']}_new_dataset_definition_26_01"
+        f"ema_decay_{config['ema_decay']}_2epoch_30_01"
     )
 
     # Configurations
@@ -384,8 +386,8 @@ if __name__ == "__main__":
             all_databases.append(
                 db_dir + f"dev_northern_tracks_muon_labels_v3_part_{idx}.db"
             )
-            all_selections.append(pd.read_csv(sel_dir + f"part_{idx}.csv"))          
-    # get_list_of_databases:
+            all_selections.append(pd.read_csv(sel_dir + f"part_{idx}.csv"))         
+
     train_selections = []
     for selection in all_selections:
         train_selections.append(selection.loc[selection["n_pulses"],:][config["index_column"]].ravel().tolist())
@@ -473,8 +475,8 @@ if __name__ == "__main__":
     else:
 
         all_res = []
-        checkpoint_path = MODEL_PATH["model5"]#'/remote/ceph/user/l/llorente/icemix_northern_retrain/model5_retrain_IceMix__batch85_optimizer_AdamW_LR2e-05_annealStrat_cos_ema_decay_0.9998__23_01_state_dict.pth'
-        run_name_pred = f"pred_icemix_model5_baseline_full"
+        checkpoint_path = '/remote/ceph/user/l/llorente/icemix_northern_retrain/model_checkpoint_graphnet/model5_retrain_IceMix_batch30_optimizer_AdamW_LR2e-05_annealStrat_cos_ema_decay_0.9998_2epoch_30_01-epoch=00-val_loss=3.334427-train_loss=3.737355.ckpt'
+        run_name_pred = f"pred_icemix_all_bug_solved"
         
         factor = 1
         pulse_breakpoints = [0, 100, 200, 300, 500, 1000, 1500, 3000]  # 10000]

@@ -474,7 +474,7 @@ class Dataset(
         L = features_array.shape[0]
         L0 = L
 
-        max_L = 384#768
+        max_L = 768
 
         if L < max_L:
             time = np.pad(time, (0, max(0, max_L - L)))

@@ -463,16 +463,16 @@ class VonMisesFisher3DLossNew(VonMisesFisherLoss):
         """
 
         target = target.reshape(-1, 3)
+        # Check(s)
+        assert prediction.dim() == 2 and prediction.size()[1] == 4
+        assert target.dim() == 2
+        assert prediction.size()[0] == target.size()[0]
+
+        kappa = prediction[:, 3]
+        p = kappa.unsqueeze(1) * prediction[:, [0, 1, 2]]
+        loss_vmf = self._evaluate(p, target)
         
-        sa2 = torch.sin(target[:, 0])
-        ca2 = torch.cos(target[:, 0])
-        sz2 = torch.sin(target[:, 1])
-        cz2 = torch.cos(target[:, 1])
-        t = torch.stack([sa2 * sz2, ca2 * sz2, cz2], -1)
-
-        p = prediction.float()
-        #l = torch.norm(prediction.float(), dim=-1).unsqueeze(-1)
-        #p = torch.cat([prediction.float() / l, l], -1)
-
-        loss = VonMisesFisher3DLoss()(p, t)
-        return loss
+        loss_icemix = (prediction * target).clip(-1 + 1e-8, 1 - 1e-8)
+        
+        return loss_icemix + 0.05*loss_vmf
+    

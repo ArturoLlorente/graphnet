@@ -14,8 +14,7 @@ from pytorch_lightning.callbacks import (
 
 from pytorch_lightning.loggers import WandbLogger
 
-from graphnet.data.dataset import EnsembleDataset
-from graphnet.data.dataset import SQLiteDataset
+
 from graphnet.data.constants import FEATURES, TRUTH
 from graphnet.models import StandardModel, StandardAverageModel
 from graphnet.models.graphs import KNNGraph
@@ -27,14 +26,11 @@ from graphnet.training.callbacks import ProgressBar
 from graphnet.training.utils import make_dataloader
 from graphnet.training.utils import collate_fn, collator_sequence_buckleting
 
-from typing import Dict, List, Optional, Union, Any
-from torch.utils.data import DataLoader
+#sys.path.append(os.path.dirname('/remote/ceph/user/l/llorente/graphnet/training'))
+from utils import make_dataloaders
 
-from graphnet.models.detector.detector import Detector
+from typing import Dict, Any
 from graphnet.models.detector.icecube import IceCube86
-
-
-#sys.path.insert(0, "/remote/ceph/user/l/llorente/")
 from graphnet.models.gnn import DeepIceModel, EncoderWithDirectionReconstruction
 
 MODELS = {'model1': DeepIceModel(dim=768, dim_base=192, depth=12, head_size=32),
@@ -54,107 +50,6 @@ MODEL_WEIGHTS = {'model1': 0.08254897,
                 'model3': 0.19367443,
                 'model4': 0.23597202,
                 'model5': 0.3342965}
-
-def make_dataloaders(
-    db: Union[List[str], str],
-    train_selection: Optional[List[int]],
-    val_selection: Optional[List[int]],
-    config: Dict[str, Any],
-) -> DataLoader:
-
-    """Construct `DataLoader` instance."""
-    # Check(s)
-    if isinstance(config["pulsemap"], str):
-        config["pulsemap"] = [config["pulsemap"]]
-    assert isinstance(train_selection, list)
-    if isinstance(db, list):
-        assert len(train_selection) == len(db)
-        train_datasets = []
-        pbar = tqdm(total=len(db))
-        for db_idx, database in enumerate(db):
-
-            train_datasets.append(
-                SQLiteDataset(
-                    path=database,
-                    graph_definition=config["graph_definition"],
-                    pulsemaps=config["pulsemap"],
-                    features=config["features"],
-                    truth=config["truth"],
-                    selection=train_selection[db_idx],
-                    node_truth=config["node_truth"],
-                    truth_table=config["truth_table"],
-                    node_truth_table=config["node_truth_table"],
-                    string_selection=config["string_selection"],
-                    loss_weight_table=config["loss_weight_table"],
-                    loss_weight_column=config["loss_weight_column"],
-                    index_column=config["index_column"],
-                )
-            )
-            pbar.update(1)
-
-        if isinstance(config["labels"], dict):
-            for label in config["labels"].keys():
-                for train_dataset in train_datasets:
-                    train_dataset.add_label(
-                        key=label, fn=config["labels"][label]
-                    )
-
-        train_dataset = EnsembleDataset(train_datasets)
-
-        training_dataloader = DataLoader(
-            dataset=train_dataset,
-            batch_size=config["batch_size"],
-            shuffle=True,
-            num_workers=config["num_workers"],
-            collate_fn=config["collate_fn"],
-            persistent_workers=config["persistent_workers"],
-            prefetch_factor=2,
-            #drop_last=True,
-        )
-
-        if val_selection is not None:
-            val_dataset = SQLiteDataset(
-                path=db[-1],
-                graph_definition=config["graph_definition"],
-                pulsemaps=config["pulsemap"],
-                features=config["features"],
-                truth=config["truth"],
-                selection=val_selection,
-                node_truth=config["node_truth"],
-                truth_table=config["truth_table"],
-                node_truth_table=config["node_truth_table"],
-                string_selection=config["string_selection"],
-                loss_weight_table=config["loss_weight_table"],
-                loss_weight_column=config["loss_weight_column"],
-                index_column=config["index_column"],
-            )
-
-            if isinstance(config["labels"], dict):
-                for label in config["labels"].keys():
-                    val_dataset.add_label(
-                        key=label, fn=config["labels"][label]
-                    )
-
-            validation_dataloader = DataLoader(
-                dataset=val_dataset,
-                batch_size=config["batch_size"],
-                shuffle=False,
-                num_workers=config["num_workers"],
-                collate_fn=config["collate_fn"],
-                persistent_workers=config["persistent_workers"],
-                prefetch_factor=2,
-                #drop_last=True,
-            )
-        else:
-            validation_dataloader = None
-            val_dataset = None
-
-    return (
-        training_dataloader,
-        validation_dataloader,
-        train_dataset,
-        val_dataset,
-    )
 
 
 def build_model(
@@ -200,11 +95,6 @@ def build_model(
             model = StandardAverageModel(**model_kwargs)
         else:
             model = StandardModel(**model_kwargs)
-        
-
-    model.prediction_columns = config["prediction_columns"]
-    model.additional_attributes = config["additional_attributes"]
-
     return model
 
 
@@ -282,12 +172,7 @@ def inference(
     
     with torch.no_grad():
         for batch in tqdm(test_dataloader):
-
-            #x = dict_to(x, device)
             pred = (torch.stack([torch.nan_to_num(model(batch.to(cuda_device))[0]).clip(-1000, 1000) for model in models], -1).cpu() * weights).sum(-1)
-
-            #pred = model(batch.to(cuda_device))
-            #preds.append(torch.nan_to_num(pred[0]).clip(-1000,1000))
             preds.append(pred)
             event_nos.append(batch.event_no)
             zenith.append(batch.zenith)
@@ -366,7 +251,7 @@ if __name__ == "__main__":
 
     run_name = (
         f"{model_name}_retrain_IceMix_batch{config['batch_size']}_optimizer_AdamW_LR{config['scheduler_kwargs']['max_lr']}_annealStrat_{config['scheduler_kwargs']['anneal_strategy']}_"
-        f"ema_decay_{config['ema_decay']}_2epoch_30_01"
+        f"ema_decay_{config['ema_decay']}_2epoch_05_02"
     )
 
     # Configurations
@@ -475,12 +360,12 @@ if __name__ == "__main__":
     else:
 
         all_res = []
-        checkpoint_path = '/remote/ceph/user/l/llorente/icemix_northern_retrain/model_checkpoint_graphnet/model5_retrain_IceMix_batch30_optimizer_AdamW_LR2e-05_annealStrat_cos_ema_decay_0.9998_2epoch_30_01-epoch=00-val_loss=3.334427-train_loss=3.737355.ckpt'
-        run_name_pred = f"pred_icemix_all_bug_solved"
+        checkpoint_path = "/remote/ceph/user/l/llorente/icemix_northern_retrain/model5_retrain_IceMix_batch32_optimizer_AdamW_LR2e-05_annealStrat_cos_ema_decay_0.9998_2epoch_30_01_state_dict.pth"
+        run_name_pred = f"pred_icemix_model5_2e"
         
         factor = 1
         pulse_breakpoints = [0, 100, 200, 300, 500, 1000, 1500, 3000]  # 10000]
-        batch_sizes_per_pulse = [1800, 750, 350, 150, 35,30,30]#[1800, 175, 40, 11, 4]  # 5, 2]
+        batch_sizes_per_pulse = [1800, 750, 350, 150, 40, 40,40]#[1800, 175, 40, 11, 4]  # 5, 2]
         config["num_workers"] = 16
         
         #test_selection = test_selection[:int(len(test_selection)*0.01)]

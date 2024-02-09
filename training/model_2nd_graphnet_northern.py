@@ -211,7 +211,7 @@ if __name__ == "__main__":
         "index_column": "event_no",
         "labels": {"direction": Direction_flipped()},
         "global_pooling_schemes": ["max"],
-        "num_database_files": 8,
+        "num_database_files": 2,
         "node_truth_table": None,
         "node_truth": None,
         "string_selection": None,
@@ -257,7 +257,13 @@ if __name__ == "__main__":
     # Configurations
     torch.multiprocessing.set_sharing_strategy("file_system")
 
-    db_dir = "/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/"
+    if os.path.isdir("/mnt/scratch/rasmus_orsoe/"):
+        db_dir = "/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/"
+        print("Using /mnt directory")
+    else:
+        db_dir = "/remote/ceph/user/l/llorente/dev_northern_tracks_muon_labels_v3/"
+        print("Using /remote directory")
+    
     sel_dir = "/remote/ceph/user/l/llorente/northern_track_selection/"
     all_databases, all_selections = [], []
     test_idx = 5

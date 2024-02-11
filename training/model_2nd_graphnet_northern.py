@@ -204,14 +204,14 @@ if __name__ == "__main__":
         "target": "direction",
         "weight_column_name": None,
         "weight_table_name": None,
-        "batch_size": 32,
+        "batch_size": 28,
         "num_workers": 32,
         "pulsemap": "InIceDSTPulses",
         "truth_table": "truth",
         "index_column": "event_no",
         "labels": {"direction": Direction_flipped()},
         "global_pooling_schemes": ["max"],
-        "num_database_files": 2,
+        "num_database_files": 8,
         "node_truth_table": None,
         "node_truth": None,
         "string_selection": None,
@@ -226,11 +226,11 @@ if __name__ == "__main__":
         "columns_nearest_neighbours": [0, 1, 2],
         "collate_fn": collator_sequence_buckleting([0.8]),
         "prediction_columns": ["dir_y_pred", "dir_x_pred", "dir_z_pred", "dir_kappa_pred"],
-        "fit": {"max_epochs": 1, "gpus": [2], "precision": '16-mixed'},
+        "fit": {"max_epochs": 1, "gpus": [3], "precision": '16-mixed'},
         "optimizer_class": AdamW,
-        "optimizer_kwargs": {"lr": 2e-5, "weight_decay": 0.05, "eps": 1e-7},
+        "optimizer_kwargs": {"lr": 1e-5, "weight_decay": 0.05, "eps": 1e-7},
         "scheduler_class": OneCycleLR,
-        "scheduler_kwargs": {"max_lr": 2e-5, "pct_start": 0.01, "anneal_strategy": 'cos', "div_factor": 25, "final_div_factor": 25},
+        "scheduler_kwargs": {"max_lr": 1e-5, "pct_start": 0.01, "anneal_strategy": 'cos', "div_factor": 25, "final_div_factor": 25},
         "scheduler_config": {"frequency": 1, "monitor": "val_loss", "interval": "step"},
         "wandb": False,
         "ema_decay": 0.9998,
@@ -240,9 +240,9 @@ if __name__ == "__main__":
     }
     config["additional_attributes"] = [ "zenith", "azimuth", config["index_column"], "energy"]
     INFERENCE = False
-    model_name = "model5"
+    model_name = "model1"
 
-    config['retrain_from_checkpoint'] = MODEL_PATH[model_name]
+    config['retrain_from_checkpoint'] = MODEL_PATH[model_name]#'/remote/ceph/user/l/llorente/icemix_northern_retrain/model5_retrain_IceMix_batch32_optimizer_AdamW_LR2e-05_annealStrat_cos_ema_decay_0.9998_2epoch_05_02_state_dict.pth'
 
     if config["swa_starting_epoch"] is not None:
         config["fit"]["distribution_strategy"] = 'ddp_find_unused_parameters_true'
@@ -251,7 +251,7 @@ if __name__ == "__main__":
 
     run_name = (
         f"{model_name}_retrain_IceMix_batch{config['batch_size']}_optimizer_AdamW_LR{config['scheduler_kwargs']['max_lr']}_annealStrat_{config['scheduler_kwargs']['anneal_strategy']}_"
-        f"ema_decay_{config['ema_decay']}_2epoch_05_02"
+        f"ema_decay_{config['ema_decay']}_1epoch_11_02"
     )
 
     # Configurations

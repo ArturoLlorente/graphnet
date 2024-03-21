@@ -27,17 +27,17 @@ class I3ParticleExtractor(I3Extractor):
         if name in frame:
             output.update(
                 {
-                    "zenith_" + name: frame[name].dir.zenith,
-                    "azimuth_" + name: frame[name].dir.azimuth,
-                    "dir_x_" + name: frame[name].dir.x,
-                    "dir_y_" + name: frame[name].dir.y,
-                    "dir_z_" + name: frame[name].dir.z,
-                    "pos_x_" + name: frame[name].pos.x,
-                    "pos_y_" + name: frame[name].pos.y,
-                    "pos_z_" + name: frame[name].pos.z,
-                    "time_" + name: frame[name].time,
-                    "speed_" + name: frame[name].speed,
-                    "energy_" + name: frame[name].energy,
+                    "zenith_" + 'EventGenerator': frame[name].dir.zenith,
+                    "azimuth_" + 'EventGenerator': frame[name].dir.azimuth,
+                    "dir_x_" + 'EventGenerator': frame[name].dir.x,
+                    "dir_y_" + 'EventGenerator': frame[name].dir.y,
+                    "dir_z_" + 'EventGenerator': frame[name].dir.z,
+                    "pos_x_" + 'EventGenerator': frame[name].pos.x,
+                    "pos_y_" + 'EventGenerator': frame[name].pos.y,
+                    "pos_z_" + 'EventGenerator': frame[name].pos.z,
+                    "time_" + 'EventGenerator': frame[name].time,
+                    "speed_" + 'EventGenerator': frame[name].speed,
+                    "energy_" + 'EventGenerator': frame[name].energy,
                 }
             )
 

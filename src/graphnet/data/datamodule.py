@@ -1,7 +1,6 @@
 """Base `Dataloader` class(es) used in `graphnet`."""
 from typing import Dict, Any, Optional, List, Tuple, Union
 import pytorch_lightning as pl
-from torch.utils.data import DataLoader
 from copy import deepcopy
 from sklearn.model_selection import train_test_split
 import pandas as pd
@@ -13,6 +12,7 @@ from graphnet.data.dataset import (
     ParquetDataset,
 )
 from graphnet.utilities.logging import Logger
+from graphnet.data.dataloader import DataLoader
 
 
 class GraphNeTDataModule(pl.LightningDataModule, Logger):
@@ -316,7 +316,6 @@ class GraphNeTDataModule(pl.LightningDataModule, Logger):
         Returns:
             Training selection, Validation selection.
         """
-        print(selection)
         assert isinstance(selection, (int, list))
         if isinstance(selection, int):
             flat_selection = [selection]

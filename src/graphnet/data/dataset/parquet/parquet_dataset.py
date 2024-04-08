@@ -195,7 +195,6 @@ class ParquetDataset(Dataset):
         """Calculate the number of events in each batch."""
         sizes = []
         for batch_id in self._indices:
-            print(batch_id)
             path = os.path.join(
                 self._path,
                 self._truth_table,
@@ -285,8 +284,10 @@ class ParquetDataset(Dataset):
             )
             data = df.select(columns)
             if isinstance(data[columns[0]][0], Series):
-                data = data.explode(columns)
-            array = data.to_numpy()
+                x = [data[col][0].to_numpy().reshape(-1, 1) for col in columns]
+                array = np.concatenate(x, axis=1)
+            else:
+                array = data.to_numpy()
         else:
             array = np.array()
         return array
@@ -297,7 +298,6 @@ class ParquetDataset(Dataset):
             file_path = os.path.join(
                 self._path, table_name, f"{table_name}_{file_idx}.parquet"
             )
-            print(file_idx)
             df = pol.read_parquet(file_path).sort(self._index_column)
             if (table_name in self._pulsemaps) or (
                 table_name == self._node_truth_table

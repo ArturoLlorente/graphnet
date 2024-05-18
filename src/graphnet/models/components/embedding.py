@@ -49,7 +49,6 @@ class SinusoidalPosEmb(LightningModule):
         emb = torch.cat((torch.sin(emb), torch.cos(emb)), dim=-1)
         return emb * self.scale
 
-
 class FourierEncoder(LightningModule):
     """Fourier encoder module.
 
@@ -83,9 +82,16 @@ class FourierEncoder(LightningModule):
         """
         super().__init__()
 
-        self.sin_emb = SinusoidalPosEmb(dim=seq_length, scaled=scaled)
+        #self.sin_emb = SinusoidalPosEmb(dim=seq_length, scaled=scaled)
+        #self.aux_emb = nn.Embedding(2, seq_length // 2)
+        #self.sin_emb2 = SinusoidalPosEmb(dim=seq_length // 2, scaled=scaled)
+        
+        
+        self.pos = SinusoidalPosEmb(dim=seq_length, scaled=scaled)
+        self.emb_charge = SinusoidalPosEmb(dim=seq_length, scaled=scaled)
+        self.time = SinusoidalPosEmb(dim=seq_length, scaled=scaled)
         self.aux_emb = nn.Embedding(2, seq_length // 2)
-        self.sin_emb2 = SinusoidalPosEmb(dim=seq_length // 2, scaled=scaled)
+        self.emb2 = SinusoidalPosEmb(dim=seq_length // 2, scaled=scaled)
 
         if n_features < 4:
             raise ValueError(
@@ -116,18 +122,18 @@ class FourierEncoder(LightningModule):
     ) -> Tensor:
         """Forward pass."""
         length = torch.log10(seq_length.to(dtype=x.dtype))
-        embeddings = [self.sin_emb(4096 * x[:, :, :3]).flatten(-2)]  # Position
+        embeddings = [self.pos(4096 * x[:, :, :3]).flatten(-2)]  # Position
 
         if self.n_features >= 5:
-            embeddings.append(self.sin_emb(1024 * x[:, :, 4]))  # Charge
+            embeddings.append(self.emb_charge(1024 * x[:, :, 4]))  # Charge
 
-        embeddings.append(self.sin_emb(4096 * x[:, :, 3]))  # Time
+        embeddings.append(self.time(4096 * x[:, :, 3]))  # Time
 
         if self.n_features >= 6:
             embeddings.append(self.aux_emb(x[:, :, 5].long()))  # Auxiliary
 
         embeddings.append(
-            self.sin_emb2(length).unsqueeze(1).expand(-1, max(seq_length), -1)
+            self.emb2(length).unsqueeze(1).expand(-1, max(seq_length), -1)
         )  # Length
 
         x = torch.cat(embeddings, -1)

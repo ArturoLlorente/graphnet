@@ -4,35 +4,39 @@ import pandas as pd
 from tqdm.auto import tqdm
 import torch
 import pickle
+from typing import Dict, Any, Callable
+
 from torch.optim import Adam
-from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 from pytorch_lightning.callbacks import (
     ModelCheckpoint,
     GradientAccumulationScheduler,
+    LearningRateMonitor,
+    EarlyStopping,
 )
-
 from pytorch_lightning.loggers import WandbLogger
 
 
 from graphnet.data.constants import FEATURES, TRUTH
-from graphnet.models import StandardModel
+from graphnet.models import StandardModel, StandardModelPred
 from graphnet.models.graphs import KNNGraph
 from graphnet.models.graphs.nodes import NodesAsPulses
 from graphnet.models.task.reconstruction import DirectionReconstructionWithKappa
 from graphnet.training.labels import Direction, Direction_flipped
 from graphnet.training.loss_functions import VonMisesFisher3DLoss, LossFunction
-from graphnet.training.callbacks import ProgressBar
+from graphnet.training.callbacks import ProgressBar, PiecewiseLinearLR
 from graphnet.training.utils import make_dataloader
 from graphnet.training.utils import collate_fn, collator_sequence_buckleting
+from graphnet.models.detector import Detector
+from graphnet.models.task import Task
+from graphnet.models.gnn import DynEdgeTITO
+from graphnet.constants import ICECUBE_GEOMETRY_TABLE_DIR
+
 
 from utils import make_dataloaders
 
-from typing import Dict, Any, Callable
-from graphnet.models.detector import Detector
-from graphnet.models.gnn import DynEdgeTITO
 
-MODEL_KWARGS = {"model1": {"dyntrans_layer_sizes":  [(256, 256), (256, 256), (256, 256), (256, 256)], "global_pooling_schemes": ["max"] , "use_global_features": True, "use_post_processing_layers": True},
+GNN_KWARGS = {"model1": {"dyntrans_layer_sizes":  [(256, 256), (256, 256), (256, 256), (256, 256)], "global_pooling_schemes": ["max"] , "use_global_features": True, "use_post_processing_layers": True},
                 "model2": {"dyntrans_layer_sizes":  [(256, 256), (256, 256), (256, 256), (256, 256)], "global_pooling_schemes": ["max"] , "use_global_features": True, "use_post_processing_layers": True},
                 "model3": {"dyntrans_layer_sizes":  [(256, 256), (256, 256), (256, 256)], "global_pooling_schemes": ["max"] , "use_global_features": False, "use_post_processing_layers": False},
                 "model4": {"dyntrans_layer_sizes":  [(256, 256), (256, 256), (256, 256)], "global_pooling_schemes": ["max"] , "use_global_features": True, "use_post_processing_layers": True},
@@ -48,11 +52,22 @@ columns_nearest_neighbours_all = {
     "model6": [0, 1, 2, 3],
 }
 
-
-
+model_dir = '/scratch/users/allorana/models_tito/'
+MODEL_WEIGHTS = {"model1": model_dir + 'model1-last.pth',
+              "model2": model_dir + 'model2-last.pth',
+              "model3": model_dir + 'model3-last.pth',
+              "model4": model_dir + 'model4-last.pth',
+              "model5": model_dir + 'model5-last.pth',
+              "model6": model_dir + 'model6-last.pth'}
 
 class IceCube86TITO(Detector):
     """`Detector` class for IceCube-86."""
+    geometry_table_path = os.path.join(
+        ICECUBE_GEOMETRY_TABLE_DIR, "icecube86.parquet"
+    )
+    xyz = ["dom_x", "dom_y", "dom_z"]
+    string_id_column = "string"
+    sensor_id_column = "sensor_id"
 
     def feature_map(self) -> Dict[str, Callable]:
         """Map standardization functions to each dimension of input data."""
@@ -89,7 +104,31 @@ class IceCube86TITO(Detector):
         )
 
 def rename_state_dict_keys(model, checkpoint):
-    return checkpoint
+    i, passed_keys = 0, 0
+    new_checkpoint = {}
+    model_keys = list(model.state_dict().keys())
+    checkpoint_keys = list(checkpoint.keys())
+    
+    if (model_keys == checkpoint_keys) or checkpoint_keys[0].startswith('_gnn.'):
+        new_checkpoint = checkpoint
+ 
+    else:
+        for m_k in model_keys:
+            if m_k == '_tasks.0._affine.weight':
+                v = checkpoint['proj_out.weight']
+                new_checkpoint[m_k] = v
+                
+            elif m_k == '_tasks.0._affine.bias':
+                v = checkpoint['proj_out.bias']
+                new_checkpoint[m_k] = v
+                
+            else: 
+                if checkpoint_keys[i] == 'proj_out.weight':
+                    passed_keys += 2
+                v = checkpoint[checkpoint_keys[i+passed_keys]]
+                new_checkpoint[m_k] = v
+                i+=1  
+    return new_checkpoint
 
 class DirectionReconstructionWithKappaTITO(Task):
     default_target_labels = ["direction"]
@@ -134,13 +173,24 @@ class DistanceLoss2(LossFunction):
     
     
 def build_model(
-    gnn_model,
+    model_name: Dict[str, Any],
     config: Dict[str, Any],
 ):
 
-    backbone = gnn_model
-    
+    backbone = DynEdgeTITO(
+            nb_inputs=config['graph_definition'].nb_outputs,
+            dyntrans_layer_sizes=GNN_KWARGS[model_name]['dyntrans_layer_sizes'],
+            global_pooling_schemes=GNN_KWARGS[model_name]['global_pooling_schemes'],
+            use_global_features=GNN_KWARGS[model_name]['use_global_features'],
+            use_post_processing_layers=GNN_KWARGS[model_name]['use_post_processing_layers'],
+            )   
+     
     task = DirectionReconstructionWithKappa(
+            hidden_size=backbone.nb_outputs,
+            target_labels="direction",
+            loss_function=VonMisesFisher3DLoss(),
+        )
+    task2 = DirectionReconstructionWithKappa(
         hidden_size=backbone.nb_outputs,
         target_labels="direction",
         loss_function=VonMisesFisher3DLoss(),
@@ -149,15 +199,17 @@ def build_model(
     model_kwargs = {
         "graph_definition": config["graph_definition"],
         "backbone": backbone,
-        "tasks": [task],
+        "tasks": [task,task2],
         "optimizer_class": config["optimizer_class"],
         "optimizer_kwargs": config["optimizer_kwargs"],
         "scheduler_class": config["scheduler_class"],
         "scheduler_kwargs": config["scheduler_kwargs"],
         "scheduler_config": config["scheduler_config"],
     }
-    
-    model = StandardModel(**model_kwargs)
+    if USE_ALL_FEATURES_IN_PREDICTION:
+        model = StandardModelPred(**model_kwargs)
+    else:
+        model = StandardModel(**model_kwargs)
     return model
 
 
@@ -172,57 +224,60 @@ def inference(
     test_selection_file: str = None,
     config: Dict[str, Any] = None,
 ):
-
-    test_selection = (
-        test_selection_file.loc[
-            (test_selection_file["n_pulses"] <= test_max_pulses)
-            & (test_selection_file["n_pulses"] > test_min_pulses),
-            :,][config["index_column"]].to_numpy())
     
-    test_dataloader = make_dataloader(
-        db=test_path,
-        selection=test_selection,
-        graph_definition=config["graph_definition"],
-        pulsemaps=config["pulsemap"],
-        num_workers=config["num_workers"],
-        features=config["features"],
-        shuffle=False,
-        truth=config["truth"],
-        batch_size=batch_size,
-        truth_table=config["truth_table"],
-        index_column=config["index_column"],
-        labels=config["labels"],
-    )
+    
+    if isinstance(test_selection_file, pd.DataFrame):
+        test_selection_file = [test_selection_file]
+          
+    test_selection = list([(
+        sel.loc[(sel["n_pulses"] <= test_max_pulses) & (sel["n_pulses"] > test_min_pulses),
+                :,][config["index_column"]].to_numpy()) for sel in test_selection_file])
+    
+    if isinstance(test_path, str):
+        test_dataloader = make_dataloader(
+            db=test_path,
+            selection=test_selection[0],
+            graph_definition=config["graph_definition"],
+            pulsemaps=config["pulsemap"],
+            num_workers=config["num_workers"],
+            features=config["features"],
+            shuffle=False,
+            truth=config["truth"],
+            batch_size=batch_size,
+            truth_table=config["truth_table"],
+            index_column=config["index_column"],
+            labels=config["labels"],
+        )
+    else:
+        config["batch_size"] = batch_size
+        config["collate_fn"] = collate_fn
+        (
+            test_dataloader,
+            _,
+            test_dataset,
+            _,
+        ) = make_dataloaders(
+            db=test_path,
+            train_selection=test_selection,
+            val_selection=None,
+            config=config,
+            train=False,
+            backend="sqlite",
+        )
 
     cuda_device = f"cuda:{device[0]}" if len(device)>0 else "cpu"
     models, weights = [], []
     if model_name == "all":
-        for i in range(1,6):
-            config["model_name"] = f"model{i}"
-            model = build_model(gnn_model=MODELS[f"model{i}"], config=config)
-            model.eval()
-            model.inference()
-            checkpoint_path = MODEL_PATH[f"model{i}"]
-            checkpoint = torch.load(checkpoint_path, torch.device("cpu"))
-            if "state_dict" in checkpoint:
-                checkpoint = checkpoint["state_dict"]
-                
-            new_checkpoint = rename_state_dict_keys(model, checkpoint) 
-            model.load_state_dict(new_checkpoint)
-            model.to(cuda_device)
-            models.append(model)
-            weights.append(MODEL_WEIGHTS[f"model{i}"])
+        AssertionError("Not implemented")
     else:
-        model = build_model(gnn_model=  [model_name], config=config)
+        model = build_model(model_name=model_name, config=config)
         #print(model)
         model.eval()
         model.inference()
-        checkpoint_path = MODEL_PATH[model_name]
         checkpoint = torch.load(checkpoint_path, torch.device("cpu"))
 
         if "state_dict" in checkpoint:
             checkpoint = checkpoint["state_dict"]
-        #temp_checkpoint = {('_tasks.0._affine.weight' if k == 'proj_out.weight' else '_tasks.0._affine.bias' if k == 'proj_out.bias' else 'backbone.' + k): v for k, v in checkpoint.items()}
         
         new_checkpoint = rename_state_dict_keys(model, checkpoint)
         model.load_state_dict(new_checkpoint)
@@ -233,23 +288,34 @@ def inference(
     weights = torch.FloatTensor(weights)
     weights /= weights.sum()
     
-    event_nos, zenith, azimuth, preds = [], [], [], []
-    print("start predict")
-    
+    event_nos ,zenith ,azimuth ,preds = [], [], [], []
+    print('start predict')
+    validateMode=True
     with torch.no_grad():
+        model.to(f'cuda:{device[0]}')
         for batch in tqdm(test_dataloader):
-            pred = (torch.stack([torch.nan_to_num(model(batch.to(cuda_device))[0]).clip(-1000, 1000) for model in models], -1).cpu() * weights).sum(-1)
-            preds.append(pred)
+            pred = model(batch.to(f'cuda:{device[0]}'))
+            
+            if USE_ALL_FEATURES_IN_PREDICTION:
+                preds.append(torch.cat(pred, axis=-1))
+            else:
+                preds.append(pred[0])
             event_nos.append(batch.event_no)
-            zenith.append(batch.zenith)
-            azimuth.append(batch.azimuth)
+            if validateMode:
+                zenith.append(batch.zenith)
+                azimuth.append(batch.azimuth)
     preds = torch.cat(preds).to("cpu").detach().numpy()
-    columns = [
-        "direction_x",
-        "direction_y",
-        "direction_z",
-        "direction_kappa",
-    ]
+    
+    
+    if USE_ALL_FEATURES_IN_PREDICTION:
+        if preds.shape[1] == 128+8:
+            columns = ['direction_x','direction_y','direction_z','direction_kappa',
+                       'direction_x1','direction_y1','direction_z1','direction_kappa1'] + [f'idx{i}' for i in range(128)]
+        else:
+            columns = ['direction_x','direction_y','direction_z','direction_kappa'] + [f'idx{i}' for i in range(128)]
+    else:
+        columns = ['direction_x','direction_y','direction_z','direction_kappa']
+
 
     results = pd.DataFrame(preds, columns=columns)
     results[config["index_column"]] = (
@@ -266,82 +332,77 @@ def inference(
 if __name__ == "__main__":
 
     config = {
-        "archive": "/remote/ceph/user/l/llorente/tito_cascade_retrain",
+        "archive": "/scratch/users/allorana/tito_cascades_retrain",
         "target": "direction",
         "batch_size": 28,
-        "num_workers": 32,
+        "num_workers": 16,
+        "num_database_files": 28,# total files 34. 28 for training, 1 for validation and 5 for testing
         "pulsemap": "InIceDSTPulses",
         "truth_table": "truth",
         "index_column": "event_no",
-        "labels": {"direction": Direction_flipped()},
+        "labels": {"direction": Direction()},
         "num_database_files": 8,
+        "accumulate_grad_batches": {0: 2},
         "persistent_workers": True,
-        "detector": IceCube86(),
-        "node_definition": IceMixNodes(),
+        "detector": IceCube86TITO(),
+        "node_definition": NodesAsPulses(),
         "nb_nearest_neighbours": 6,
-        "features": ["dom_x", "dom_y", "dom_z", "dom_time", "charge", "hlc", "rde"],
-        "truth": ["energy", "energy_track", "position_x", "position_y", "position_z", "azimuth", "zenith", "pid", "elasticity", "interaction_type", "interaction_time"],
+        "features": ["dom_x", "dom_y", "dom_z", "dom_time", "charge", "hlc"],
+        "truth": TRUTH.ICECUBE86,
         "columns_nearest_neighbours": [0, 1, 2],
         "collate_fn": collator_sequence_buckleting([0.8]),
-        "prediction_columns": ["dir_y_pred", "dir_x_pred", "dir_z_pred", "dir_kappa_pred"],
-        "fit": {"max_epochs": 1, "gpus": [0,1,2,3], "precision": '16-mixed'},
-        "optimizer_class": AdamW,
+        "prediction_columns": ["dir_x_pred", "dir_y_pred", "dir_z_pred", "dir_kappa_pred"],
+        "fit": {"max_epochs": 100, "gpus": [0,1,2,3], "precision": '16-mixed'},
+        "optimizer_class": Adam,
         "optimizer_kwargs": {"lr": 1e-5, "weight_decay": 0.05, "eps": 1e-7},
-        "scheduler_class": ReduceLROnPlateau,
-        "scheduler_kwargs": {"max_lr": 1e-5, "pct_start": 0.01, "anneal_strategy": 'cos', "div_factor": 25, "final_div_factor": 25},
-        "scheduler_config": {"frequency": 1, "monitor": "val_loss", "interval": "step"},
+        "scheduler_class": PiecewiseLinearLR,
+        "scheduler_config": {"interval": "step"},
         "ckpt_path": False,
+        "db_backend": "sqlite",
+        "prefetch_factor": 2,
         #"model_name": 'model2',
     }
     config["additional_attributes"] = [ "zenith", "azimuth", config["index_column"], "energy"]
     INFERENCE = True
-    model_name = "all"
+    model_name = "model1"
+    USE_ALL_FEATURES_IN_PREDICTION = True
 
-    #config['retrain_from_checkpoint'] = MODEL_PATH[model_name]
+    config['retrain_from_checkpoint'] = MODEL_WEIGHTS[model_name]
 
-    if config["swa_starting_epoch"] is not None:
-        config["fit"]["distribution_strategy"] = 'ddp_find_unused_parameters_true'
-    else:
+    if len(config["fit"]["gpus"]) > 1:
         config["fit"]["distribution_strategy"] = 'ddp'
 
     run_name = (
-        f"{model_name}_retrain_IceMix_batch{config['batch_size']}_optimizer_AdamW_LR{config['scheduler_kwargs']['max_lr']}_annealStrat_{config['scheduler_kwargs']['anneal_strategy']}_"
-        f"ema_decay_{config['ema_decay']}_1epoch_11_02"
+        #f"{model_name}_retrain_IceMix_batch{config['batch_size']}_optimizer_Adam_LR{config['scheduler_kwargs']['max_lr']}_annealStrat_{config['scheduler_kwargs']['anneal_strategy']}_"
+        #f"ema_decay_{config['ema_decay']}_1epoch_11_02"
+        f"test_tito_{model_name}"
     )
 
     # Configurations
     torch.multiprocessing.set_sharing_strategy("file_system")
     #torch.multiprocessing.set_start_method("spawn")
 
-    if os.path.isdir("/mnt/scratch/rasmus_orsoe/"):
-        db_dir = "/mnt/scratch/rasmus_orsoe/databases/dev_northern_tracks_muon_labels_v3/"
-        print("Using /mnt directory")
-    else:
-        db_dir = "/remote/ceph/user/l/llorente/dev_northern_tracks_muon_labels_v3/"
-        print("Using /remote directory")
+    all_databases, test_databases, test_selections = [],[],[]
+    if config["db_backend"] == "sqlite":
+        sqlite_db_dir = '/scratch/users/allorana/merged_sqlite_1505'
+        if not INFERENCE:
+            for i in range(28):
+                all_databases.append(f'{sqlite_db_dir}/part{i+1}/merged/merged.db')
+            train_selections = None
+            val_selection = None
+        else:
+            for i in range(29,33):
+                test_databases.append(f'{sqlite_db_dir}/part{i+1}/merged/merged.db')  
+                test_selections.append(pd.read_csv(f'{sqlite_db_dir}/selection_files/part{i+1}_n_pulses.csv'))
+
+    elif config["db_backend"] == "parquet":
+        all_selections = list(range(1000))
+        all_databases = '/scratch/users/allorana/parquet_really_small/merged'#'/scratch/users/allorana/parquet_small/merged/'
+        train_val_selection = all_selections[:int(len(all_selections) * 0.9)]
+        train_selections = train_val_selection[:-1]
+        val_selection = train_val_selection[-1:]
     
-    #sel_dir = "/remote/ceph/user/l/llorente/northern_track_selection/"
-    #all_databases, all_selections = [], []
-    #test_idx = 5
-    #for idx in range(1, config["num_database_files"] + 1):
-    #    if idx == test_idx:
-    #        test_database = (
-    #            db_dir + f"dev_northern_tracks_muon_labels_v3_part_{idx}.db"
-    #        )
-    #        test_selection = pd.read_csv(sel_dir + f"part_{idx}.csv")
-    #    else:
-    #        all_databases.append(
-    #            db_dir + f"dev_northern_tracks_muon_labels_v3_part_{idx}.db"
-    #        )
-    #        all_selections.append(pd.read_csv(sel_dir + f"part_{idx}.csv"))         
-#
-    #train_selections = []
-    #for selection in all_selections:
-    #    train_selections.append(selection.loc[selection["n_pulses"],:][config["index_column"]].ravel().tolist())
-    #train_selections[-1] = train_selections[-1][:int(len(train_selections[-1]) * 0.9)]
-    #
-    #val_selection = (selection.loc[(selection["n_pulses"]), :][config["index_column"]].ravel().tolist())
-    #val_selection = val_selection[int(len(val_selection) * 0.9) :]
+        test_selection = all_selections[int(len(all_selections) * 0.9):]
 
     
     config["graph_definition"] = KNNGraph(
@@ -367,13 +428,21 @@ if __name__ == "__main__":
             config=config,
         )
 
-        if config["scheduler_kwargs"]:
-            config["scheduler_kwargs"]["steps_per_epoch"] = len(training_dataloader)
-            config["scheduler_kwargs"]["epochs"] = config["fit"]["max_epochs"]
+        config['scheduler_kwargs'] = {
+                        "milestones": [
+                            0,
+                            len(training_dataloader)//(len(config['fit']['gpus'])*config['accumulate_grad_batches'][0]*30),
+                            len(training_dataloader)*config['fit']['max_epochs']//(len(config['fit']['gpus'])*config['accumulate_grad_batches'][0]*2),
+                            len(training_dataloader)*config['fit']['max_epochs']//(len(config['fit']['gpus'])*config['accumulate_grad_batches'][0]),                
+                        ],
+                        "factors": [1e-03, 1, 1, 1e-03],
+                        "verbose": False,
+        }
 
         callbacks = [
             ProgressBar(),
-            GradientAccumulationScheduler(scheduling={0: 4096//config["batch_size"]}),
+            GradientAccumulationScheduler(scheduling=config['accumulate_grad_batches']),
+            LearningRateMonitor(logging_interval='step'),
         ]
         if validation_dataloader is not None:
             callbacks.append(
@@ -388,7 +457,7 @@ if __name__ == "__main__":
             )
     
     if not INFERENCE:
-        model = build_model(gnn_model=MODELS[model_name], config=config)
+        model = build_model(model_name=model_name, config=config)
         if config["ckpt_path"]:
             config["fit"]["ckpt_path"] = config["ckpt_path"]
 
@@ -398,9 +467,9 @@ if __name__ == "__main__":
             checkpoint = torch.load(checkpoint_path, torch.device("cpu"))
             if "state_dict" in checkpoint:
                 checkpoint = checkpoint["state_dict"]
-            new_checkpoint = {('_tasks.0._affine.weight' if k == 'proj_out.weight' else '_tasks.0._affine.bias' if k == 'proj_out.bias' else '_gnn.' + k): v for k, v in checkpoint.items()}
-            model.load_state_dict(new_checkpoint, strict=False)
-            del checkpoint, new_checkpoint
+            #new_checkpoint = {('_tasks.0._affine.weight' if k == 'proj_out.weight' else '_tasks.0._affine.bias' if k == 'proj_out.bias' else '_gnn.' + k): v for k, v in checkpoint.items()}
+            model.load_state_dict(checkpoint, strict=False)
+            del checkpoint
         if validation_dataloader is not None:
             config["fit"]["val_dataloader"] = validation_dataloader
 
@@ -420,50 +489,50 @@ if __name__ == "__main__":
         )
         print(f"Model saved to {config['archive']}/{run_name}.pth")
     else:
+        torch.multiprocessing.set_start_method("spawn")
+        for model_name in MODEL_WEIGHTS.keys():
+            all_res = []
+            checkpoint_path = MODEL_WEIGHTS[model_name]
+            run_name_pred = f"test_tito_{model_name}"
+            
+            factor = 1
+            pulse_breakpoints = [0, 100, 200, 300, 500, 1000, 5000, 10000]
+            batch_sizes_per_pulse = [4800, 2800, 700, 400, 240, 120, 60, 30]
+            config["num_workers"] = 4
+            config["fit"]["gpus"] = [2]
 
-        all_res = []
-        checkpoint_path = None#"/remote/ceph/user/l/llorente/icemix_northern_retrain/model5_retrain_IceMix_batch32_optimizer_AdamW_LR2e-05_annealStrat_cos_ema_decay_0.9998_2epoch_30_01_state_dict.pth"
-        run_name_pred = f"test_all_reco"
-        test_database = '/scratch/users/allorana/cascades_21537.db'
         
-        factor = 0.8
-        pulse_breakpoints = [0, 100, 200, 300]#, 500, 10000000]
-        batch_sizes_per_pulse = [3600, 2800, 700]#, 400, 240]
-        config["num_workers"] = 32
-        
-        test_selection = pd.read_csv('/scratch/users/allorana/cascades_21537_selection.csv')
-
-        for min_pulse, max_pulse in zip(
-            pulse_breakpoints[:-1], pulse_breakpoints[1:]
-        ):
-            print(
-                f"predicting {min_pulse} to {max_pulse} pulses with batch size {int(factor*batch_sizes_per_pulse[pulse_breakpoints.index(max_pulse)-1])}"
-            )
-            pred_checkpoint_path = f"/scratch/users/allorana/prediction_cascades_icemix/{run_name_pred}_{min_pulse}to{max_pulse}pulses.pkl"
-            if os.path.exists(pred_checkpoint_path):
-                results = pickle.load(open(pred_checkpoint_path, "rb"))
-            else:
-                results = inference(
-                    model_name = model_name,
-                    device=config["fit"]["gpus"],
-                    test_min_pulses=min_pulse,
-                    test_max_pulses=max_pulse,
-                    batch_size=max(int(
-                        factor * batch_sizes_per_pulse[pulse_breakpoints.index(max_pulse) - 1]
-                    ), 1),
-                    checkpoint_path=checkpoint_path,
-                    test_path=test_database,
-                    test_selection_file=test_selection,
-                    config=config,
+            for min_pulse, max_pulse in zip(
+                pulse_breakpoints[:-1], pulse_breakpoints[1:]
+            ):
+                print(
+                    f"predicting {min_pulse} to {max_pulse} pulses with batch size {int(factor*batch_sizes_per_pulse[pulse_breakpoints.index(max_pulse)-1])}"
                 )
-                pickle.dump(results, open(pred_checkpoint_path, "wb"))
+                pred_checkpoint_path = f"/scratch/users/allorana/prediction_cascades_tito/{run_name_pred}_{min_pulse}to{max_pulse}pulses.pkl"
+                if os.path.exists(pred_checkpoint_path):
+                    results = pickle.load(open(pred_checkpoint_path, "rb"))
+                else:
+                    results = inference(
+                        model_name = model_name,
+                        device=config["fit"]["gpus"],
+                        test_min_pulses=min_pulse,
+                        test_max_pulses=max_pulse,
+                        batch_size=max(int(
+                            factor * batch_sizes_per_pulse[pulse_breakpoints.index(max_pulse) - 1]
+                        ), 1),
+                        checkpoint_path=checkpoint_path,
+                        test_path=test_databases,
+                        test_selection_file=test_selections,
+                        config=config,
+                    )
+                    pickle.dump(results, open(pred_checkpoint_path, "wb"))
 
-            all_res.append(results)
-            del results
-            torch.cuda.empty_cache()
+                all_res.append(results)
+                del results
+                torch.cuda.empty_cache()
 
-        results = pd.concat(all_res).sort_values(config["index_column"])
-        
-        path_to_save = f"/scratch/users/allorana/prediction_cascades_icemix"
-        results.to_csv(f"{path_to_save}/{run_name_pred}.csv")
-        print(f"predicted and saved in {path_to_save}/{run_name_pred}.csv")
+            results = pd.concat(all_res).sort_values(config["index_column"])
+            
+            path_to_save = f"/scratch/users/allorana/prediction_cascades_tito"
+            results.to_csv(f"{path_to_save}/{run_name_pred}.csv")
+            print(f"predicted and saved in {path_to_save}/{run_name_pred}.csv")

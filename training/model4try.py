@@ -30,50 +30,8 @@ from graphnet.training.utils import collate_fn, collator_sequence_buckleting
 from utils import make_dataloaders
 
 from typing import Dict, Any
+from graphnet.models.detector.icecube import IceCube86
 from graphnet.models.gnn import DeepIce
-
-from graphnet.models.detector.detector import Detector
-from graphnet.constants import ICECUBE_GEOMETRY_TABLE_DIR
-
-
-class IceCube86(Detector):
-    """`Detector` class for IceCube-86."""
-
-    geometry_table_path = os.path.join(
-        ICECUBE_GEOMETRY_TABLE_DIR, "icecube86.parquet"
-    )
-    xyz = ["dom_x", "dom_y", "dom_z"]
-    string_id_column = "string"
-    sensor_id_column = "sensor_id"
-
-    def feature_map(self) -> Dict[str, Callable]:
-        """Map standardization functions to each dimension of input data."""
-        feature_map = {
-            "dom_x": self._dom_xyz,
-            "dom_y": self._dom_xyz,
-            "dom_z": self._dom_xyz,
-            "dom_time": self._dom_time,
-            "charge": self._charge,
-            "rde": self._rde,
-            "pmt_area": self._pmt_area,
-            "hlc": self._identity,
-        }
-        return feature_map
-
-    def _dom_xyz(self, x: torch.tensor) -> torch.tensor:
-        return x / 500.0
-
-    def _dom_time(self, x: torch.tensor) -> torch.tensor:
-        return (x - 1.0e04) / 3.0e4
-
-    def _charge(self, x: torch.tensor) -> torch.tensor:
-        return torch.log10(x) / 3
-
-    def _rde(self, x: torch.tensor) -> torch.tensor:
-        return (x - 1) / 0.35
-
-    def _pmt_area(self, x: torch.tensor) -> torch.tensor:
-        return x / 0.05
 
 MODELS = {'model1': DeepIce(hidden_dim=768, seq_length=192, depth=12, head_size=32, n_features=7),
         'model2': DeepIce(hidden_dim=768, seq_length=192, depth=12, head_size=64, n_features=7),
@@ -179,41 +137,26 @@ def inference(
     config: Dict[str, Any] = None,
 ):
 
-    test_selection = list([(
-        sel.loc[(sel["n_pulses"] <= test_max_pulses) & (sel["n_pulses"] > test_min_pulses),
-                :,][config["index_column"]].to_numpy()) for sel in test_selection_file])
+    test_selection = (
+        test_selection_file.loc[
+            (test_selection_file["n_pulses"] <= test_max_pulses)
+            & (test_selection_file["n_pulses"] > test_min_pulses),
+            :,][config["index_column"]].to_numpy())
     
-    if isinstance(test_path, str):
-        test_dataloader = make_dataloader(
-            db=test_path,
-            selection=test_selection[0],
-            graph_definition=config["graph_definition"],
-            pulsemaps=config["pulsemap"],
-            num_workers=config["num_workers"],
-            features=config["features"],
-            shuffle=False,
-            truth=config["truth"],
-            batch_size=batch_size,
-            truth_table=config["truth_table"],
-            index_column=config["index_column"],
-            labels=config["labels"],
-        )
-    else:
-        config["batch_size"] = batch_size
-        config["collate_fn"] = collate_fn
-        (
-            test_dataloader,
-            _,
-            test_dataset,
-            _,
-        ) = make_dataloaders(
-            db=test_path,
-            train_selection=test_selection,
-            val_selection=None,
-            config=config,
-            train=False,
-            backend="sqlite",
-        )
+    test_dataloader = make_dataloader(
+        db=test_path,
+        selection=test_selection,
+        graph_definition=config["graph_definition"],
+        pulsemaps=config["pulsemap"],
+        num_workers=config["num_workers"],
+        features=config["features"],
+        shuffle=False,
+        truth=config["truth"],
+        batch_size=batch_size,
+        truth_table=config["truth_table"],
+        index_column=config["index_column"],
+        labels=config["labels"],
+    )
 
     cuda_device = f"cuda:{device[0]}" if len(device)>0 else "cpu"
     models, weights = [], []
@@ -287,9 +230,9 @@ if __name__ == "__main__":
     config = {
         "archive": "/scratch/users/allorana/icemix_cascades_retrain",
         "target": "direction",
-        "batch_size": 12,
-        "num_workers": 16,
-        "num_database_files": 29+1,# total files 34. 29 for training, 1 for validation and 4for testing
+        "batch_size": 8,
+        "num_workers": 32,
+        "num_database_files": 28,# total files 34. 28 for training, 1 for validation and 5 for testing
         "pulsemap": "InIceDSTPulses",
         "truth_table": "truth",
         "index_column": "event_no",
@@ -305,7 +248,7 @@ if __name__ == "__main__":
         "truth": ["energy", "energy_track", "position_x", "position_y", "position_z", "azimuth", "zenith", "pid", "elasticity", "interaction_type", "interaction_time"],
         "columns_nearest_neighbours": [0, 1, 2],
         "collate_fn": collator_sequence_buckleting([0.5,0.9]),
-        "fit": {"max_epochs": 1, "gpus": [0], "precision": '16-mixed'},
+        "fit": {"max_epochs": 1, "gpus": [2,3], "precision": '16-mixed'},
         "optimizer_class": AdamW,
         "optimizer_kwargs": {"lr": 1e-5, "weight_decay": 0.05, "eps": 1e-7},
         "scheduler_class": OneCycleLR,
@@ -321,47 +264,34 @@ if __name__ == "__main__":
     }
     config["additional_attributes"] = [ "zenith", "azimuth", config["index_column"], "energy"]
     INFERENCE = False
-    model_name = "model2"
-    
+    model_name = "model5"
     #torch.multiprocessing.set_start_method("spawn")
-    
     if model_name == "model5":
         config["columns_nearest_neighbours"] = [0, 1, 2, 3]
 
-    config['retrain_from_checkpoint'] = '/scratch/users/allorana/icemix_cascades_retrain/retrain_model2_state_dict.pth'
+    config['retrain_from_checkpoint'] = MODEL_PATH[model_name]
 
-    #if config["swa_starting_epoch"] is not None:
-    #config["fit"]["distribution_strategy"] = 'ddp'
-    #else:
-    #    config["fit"]["distribution_strategy"] = 'ddp'
-
+    config["fit"]["distribution_strategy"] = 'ddp_find_unused_parameters_true'
     run_name = (
 #        f"{model_name}_cascades_retrain_IceMix_batch{config['batch_size']}_optimizer_AdamW_LR{config['scheduler_kwargs']['max_lr']}_annealStrat_{config['scheduler_kwargs']['anneal_strategy']}_"
 #        f"ema_decay_{config['ema_decay']}_1epoch_14_05"
-	f"retrain_{model_name}_2e"
+	f"retrain_{model_name}"
     )
 
     # Configurations
     torch.multiprocessing.set_sharing_strategy("file_system")
     
     
-    all_databases, test_databases = [],[]
-    test_selections, train_selections = [],[]
+    all_databases = []
     if config["db_backend"] == "sqlite":
         sqlite_db_dir = '/scratch/users/allorana/merged_sqlite_1505'
-        if not INFERENCE:
-            for i in range(30):
-                all_databases.append(f'{sqlite_db_dir}/part{i}/merged/merged.db')
-                train_selections.append(None)
-            val_selection = None
-        else:
-            for i in range(30,34):
-                all_databases.append(f'{sqlite_db_dir}/part{i}/merged/merged.db')  
-                test_selections.append(pd.read_csv(f'{sqlite_db_dir}/selection_files/part{i}_n_pulses.csv'))
-
+        for i in range(config["num_database_files"]):
+            all_databases.append(f'{sqlite_db_dir}/part{i+1}/merged/merged.db')
+        train_selections = None
+        val_selection = None
     elif config["db_backend"] == "parquet":
         all_selections = list(range(1000))
-        all_databases = '/scratch/users/allorana/parquet_really_small/merged'
+        all_databases = '/scratch/users/allorana/parquet_really_small/merged'#'/scratch/users/allorana/parquet_small/merged/'
         train_val_selection = all_selections[:int(len(all_selections) * 0.9)]
         train_selections = train_val_selection[:-1]
         val_selection = train_val_selection[-1:]
@@ -444,24 +374,23 @@ if __name__ == "__main__":
         model.save_state_dict(
             os.path.join(config["archive"], f"{run_name}_state_dict.pth")
         )
-        #print(f"Model saved to {config['archive']}/{run_name}.pth")
+        print(f"Model saved to {config['archive']}/{run_name}.pth")
     else:
         #torch.multiprocessing.set_start_method("spawn")
 
         for model_i in [model_name]:#, 'model5']:
             all_res = []
-            #checkpoint_path = '/scratch/users/allorana/icemix_cascades_retrain/retrain_model2_state_dict.pth'
-            checkpoint_path = MODEL_PATH[model_i]
-            run_name_pred = f"{model_i}_base_newtest"
-            #test_databases = '/scratch/users/allorana/cascades_21537.db'
-            test_databases = all_databases
-            factor = 0.2
-            pulse_breakpoints =     [0, 100,   200, 300, 500,  1000, 2000, 3000, 10000000]
-            batch_sizes_per_pulse = [4800, 2800,  700, 400, 100,   40,    15,  15]
-            config["num_workers"] = 4
-            config["fit"]["gpus"] = [1]
+            checkpoint_path = MODEL_PATH[model_i]#'/scratch/users/allorana/icemix_cascades_retrain/test_sq_state_dict.pth'
+            run_name_pred = f"{model_i}_3kpulses_newrde"
+            test_database = '/scratch/users/allorana/cascades_21537.db'
             
-            #test_selection = pd.read_csv('/scratch/users/allorana/cascades_21537_selection.csv')
+            factor = 0.6
+            pulse_breakpoints =     [0, 100,   200, 300, 500,  1000, 2000, 3000, 10000000]
+            batch_sizes_per_pulse = [4800, 2800,  700, 400, 100,   45,    15,  30]
+            config["num_workers"] = 32
+            config["fit"]["gpus"] = [3]
+            
+            test_selection = pd.read_csv('/scratch/users/allorana/cascades_21537_selection.csv')
 
             for min_pulse, max_pulse in zip(
                 pulse_breakpoints[:-1], pulse_breakpoints[1:]
@@ -482,8 +411,8 @@ if __name__ == "__main__":
                             factor * batch_sizes_per_pulse[pulse_breakpoints.index(max_pulse) - 1]
                         ), 1),
                         checkpoint_path=checkpoint_path,
-                        test_path=test_databases,
-                        test_selection_file=test_selections,
+                        test_path=test_database,
+                        test_selection_file=test_selection,
                         config=config,
                     )
                     pickle.dump(results, open(pred_checkpoint_path, "wb"))

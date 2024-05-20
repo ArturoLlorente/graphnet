@@ -207,6 +207,8 @@ class sensitivity_plots_jupyter:
         track_colour = [plotting_colours[i % len(plotting_colours)] for i in track_index]
         cascade_index = [len(df)+i+1 for i in range(len(df))]
         cascade_colour = [plotting_colours[i % len(plotting_colours)] for i in cascade_index]
+        if not tracks_in_dataset:
+            cascade_colour = track_colour
         all_colour = {'track': track_colour, 'cascade': cascade_colour}
         
         percentiles = ['p_16', 'p_84']
@@ -242,7 +244,7 @@ class sensitivity_plots_jupyter:
                 if tracks_in_dataset:
                     ax.plot(np.nan, np.nan, color = all_colour['track'][i], label = f'Tracks {df_labels_plotting[i]}')
                 if cascades_in_dataset:
-                    ax.plot(np.nan, np.nan, color = all_colour['cascade'][i], label = f'Cascades {df_labels_plotting[i]}')
+                    ax.plot(np.nan, np.nan, color = all_colour['cascade'][i], label = f'{df_labels_plotting[i]}')#f'Cascades {df_labels_plotting[i]}')
         if ylims is not None:
             ax.set_ylim(ylims[0], ylims[1])
             
@@ -343,13 +345,14 @@ class sensitivity_plots_jupyter:
                         if ls != '--':
                             ax.step(10**percentile_calculations[event_type][pred_name]['mean'], percentile_calculations[event_type][pred_name][percentile], label=None, ls=ls, color=percentile_calculations[event_type][pred_name]['colour'], where='mid')
                     else:
-                        ax.plot(10**percentile_calculations[event_type][pred_name]['mean'], percentile_calculations[event_type][pred_name][percentile], label=None, ls=ls, color=percentile_calculations[event_type][pred_name]['colour'])
+                        if ls != '--':
+                            ax.plot(10**percentile_calculations[event_type][pred_name]['mean'], percentile_calculations[event_type][pred_name][percentile], label=None, ls=ls, color=percentile_calculations[event_type][pred_name]['colour'])
                     if ls == '--':
                         ax.fill_between(10**percentile_calculations[event_type][pred_name]['mean'], percentile_calculations[event_type][pred_name]['p_16'], percentile_calculations[event_type][pred_name]['p_84'], alpha=0.1, color=percentile_calculations[event_type][pred_name]['colour'])
 
-        ax.plot(np.nan, np.nan, label = '84th', ls = '--', color = 'grey')
-        if include_median:
-            ax.plot(np.nan, np.nan, label = 'Median', ls = '-', color = 'grey')
+        #ax.plot(np.nan, np.nan, label = '84th', ls = '--', color = 'grey')
+        #if include_median:
+            #ax.plot(np.nan, np.nan, label = 'Median', ls = '-', color = 'grey')
         
         if include_energy_hist:
             for idx, df_i in enumerate(df):
@@ -397,6 +400,38 @@ class sensitivity_plots_jupyter:
         #plt.suptitle(f'{key.capitalize()}', size = font_size)
         ax.set_xscale('log')
 
+        plot_pulses = True
+        if plot_pulses:
+            pulses_df = pd.read_csv('/scratch/users/allorana/cascades_21537_selection_plus_energy.csv')
+
+
+            bins = np.logspace(np.log10(min(pulses_df['energy'])), np.log10(max(pulses_df['energy'])), 100) 
+            #print(bins)
+            #print(energy_bins)  
+            bins = [10**x for x in energy_bins]
+            bins = 10**percentile_calculations['cascades']['model2_2kpulses']['mean']
+            ax2 = ax.twinx()
+            ax2.set_ylabel('N Pulses')
+            
+            all_pulses = []
+            for minbin, maxbin in zip(bins[:-1], bins[1:]):
+                all_pulses.append(np.mean(pulses_df.loc[(pulses_df['energy']<=maxbin) & (pulses_df['energy']>minbin)]['n_pulses']))
+                
+            pulse_cuts = [2000, 768]
+            for cut_idx, pulse_cut in enumerate(pulse_cuts):
+                closerval = min(all_pulses, key=lambda x:abs(x-pulse_cut))
+                specific_x_value = bins[all_pulses.index(closerval)]
+                # Add a vertical line at the X value corresponding to the specific Y value
+                ax2.axvline(x=specific_x_value, color='black', alpha=min((cut_idx+1)*0.4,1), linewidth=1, label=f'{pulse_cut} pulses', linestyle='--', ymax=0.6)
+
+            ax2.plot(bins[1:], all_pulses, drawstyle='steps-mid', color='yellow', label='N Pulses', alpha=0.6)
+            #ax2.set_xscale('log')
+            ax2.set_yscale('log')
+            ax2.legend(frameon = False, fontsize = font_size, ncol = 1, bbox_to_anchor=legend_bbox, loc='upper left')
+            ax2.set_ylim(top=10**6)
+            
+            
+        plt.title(f'{key} Resolution on Cascades', size = font_size)
         plt.rcParams['xtick.labelsize'] = 10
         plt.rcParams['ytick.labelsize'] = 10 
         plt.rcParams['axes.labelsize'] = 10
@@ -404,20 +439,31 @@ class sensitivity_plots_jupyter:
         plt.rcParams['legend.fontsize'] = 10
         #plt.text(x = text_loc[0], y = text_loc[1], s = "IceCube Simulation", fontsize = 12)
         fig.savefig(f'{key}_reco.png')
-
+        
         return None
 
 
 if __name__ == '__main__':
-    df = [pd.read_csv('/scratch/users/allorana/prediction_cascades_icemix/model1_base.csv'),
+    df = [#pd.read_csv('/scratch/users/allorana/prediction_cascades_tito/test_tito_model5.csv'),
+          #pd.read_csv('/scratch/users/allorana/prediction_cascades_tito/tito_raw_cascades/test_tito_model1.csv'),
+          #pd.read_csv('/scratch/users/allorana/prediction_cascades_tito/tito_raw_cascades/test_tito_model2.csv'),
+          #pd.read_csv('/scratch/users/allorana/prediction_cascades_tito/tito_raw_cascades/test_tito_model3.csv'),
+          #pd.read_csv('/scratch/users/allorana/prediction_cascades_tito/tito_raw_cascades/test_tito_model4.csv'),
+          #pd.read_csv('/scratch/users/allorana/prediction_cascades_tito/tito_raw_cascades/test_tito_model5.csv'),
+          #pd.read_csv('/scratch/users/allorana/prediction_cascades_tito/tito_raw_cascades/test_tito_model6.csv'),
+          pd.read_csv('/scratch/users/allorana/prediction_cascades_icemix/model2_5kpulses.csv'),
           pd.read_csv('/scratch/users/allorana/prediction_cascades_icemix/model2_base.csv'),
-          pd.read_csv('/scratch/users/allorana/prediction_cascades_icemix/model3_base.csv'),
-          pd.read_csv('/scratch/users/allorana/prediction_cascades_icemix/model4_base.csv'),
-          pd.read_csv('/scratch/users/allorana/prediction_cascades_icemix/model5_base.csv')]
+          pd.read_csv('/scratch/users/allorana/prediction_cascades_icemix/model2_1e.csv'),
+          #pd.read_csv('/scratch/users/allorana/prediction_cascades_icemix/model4_3kpulses_newrde.csv'),
+          #pd.read_csv('/scratch/users/allorana/prediction_cascades_icemix/model4_3kpulses.csv'),          
+          #pd.read_csv('/scratch/users/allorana/prediction_cascades_icemix/model4_rde2.csv')
+          ]
     db = '/scratch/users/allorana/cascades_21537.db'
-    df_labels = ['model1', 'model2', 'model3', 'model4', 'model5']
+    df_labels = ['model2_2kpulses', 'model2_768pulses', 'model2_2k_1epoch']
 
-    sp = sensitivity_plots_jupyter(df, df_labels, db, x_pred_label = 'direction_y', y_pred_label = 'direction_x', z_pred_label = 'direction_z')
+    dir_x = 'direction_y'
+    dir_y = 'direction_x'
+    sp = sensitivity_plots_jupyter(df, df_labels, db, x_pred_label = dir_x, y_pred_label = dir_y, z_pred_label = 'direction_z')
 
     #x_pred_label, y_pred_label, z_pred_label = 'direction_y', 'direction_x', 'direction_z'
 
@@ -428,4 +474,5 @@ if __name__ == '__main__':
                                 include_residual_hist = False,
                                 cascades_in_dataset = True,
                                 compare_likelihood = True,
-                                ylims = [5, 30])
+                                #ylims = [9, 30]
+                                )

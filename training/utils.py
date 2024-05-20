@@ -2,7 +2,6 @@ from graphnet.data.dataset import EnsembleDataset
 from graphnet.data.dataset import SQLiteDataset, ParquetDataset
 from typing import Dict, List, Optional, Union, Any
 from torch.utils.data import DataLoader
-from tqdm.auto import tqdm
 
 def make_dataloaders(
     db: Union[List[str], str],
@@ -10,6 +9,7 @@ def make_dataloaders(
     val_selection: Optional[List[int]],
     backend: str,
     config: Dict[str, Any],
+    train: Optional[bool] = True,
 ) -> DataLoader:
 
     """Construct `DataLoader` instance."""
@@ -19,9 +19,7 @@ def make_dataloaders(
     if backend == "sqlite":
         #assert len(train_selection) == len(db)
         train_datasets = []
-        pbar = tqdm(total=len(db))
         for db_idx, database in enumerate(db):
-
             train_datasets.append(
                 SQLiteDataset(
                     path=database,
@@ -29,12 +27,11 @@ def make_dataloaders(
                     pulsemaps=config["pulsemap"],
                     features=config["features"],
                     truth=config["truth"],
-                    selection=None,#train_selection[db_idx],
+                    selection=train_selection[db_idx],
                     truth_table=config["truth_table"],
                     index_column=config["index_column"],
                 )
             )
-            pbar.update(1)
 
         if isinstance(config["labels"], dict):
             for label in config["labels"].keys():
@@ -65,7 +62,7 @@ def make_dataloaders(
     training_dataloader = DataLoader(
         dataset=train_dataset,
         batch_size=config["batch_size"],
-        shuffle=True,
+        shuffle=train,
         num_workers=config["num_workers"],
         collate_fn=config["collate_fn"],
         persistent_workers=config["persistent_workers"],
@@ -116,7 +113,7 @@ def make_dataloaders(
     else:
         validation_dataloader = None
         val_dataset = None
-
+        
     return (
         training_dataloader,
         validation_dataloader,

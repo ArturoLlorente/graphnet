@@ -133,6 +133,7 @@ class DeepIce(GNN):
         rel_pos_bias = self.rel_pos(x0)
         batch_size = mask.shape[0]
         if self.include_dynedge:
+            data.x[:,[4,5,6]] = data.x[:,[5,6,4]]
             graph = self.dyn_edge(data)
             graph, _ = to_dense_batch(graph, data.batch)
             x = torch.cat([x, graph], 2)

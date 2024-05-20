@@ -11,18 +11,20 @@ def main() -> None:
     """Convert IceCube-86 I3 files to intermediate `backend` format."""
     # Check(s)
 
-    idx = 33
-    inputs = [f"/scratch/users/allorana/parquet_separated_parts/sqlite_part{idx}"]
-    outdir = f"/scratch/users/allorana/merged_sqlite_1505/part{idx}"
+    inputs = ["/scratch/users/allorana/parquet_separated_parts/sqlite_part30",
+              "/scratch/users/allorana/parquet_separated_parts/sqlite_part31",
+              "/scratch/users/allorana/parquet_separated_parts/sqlite_part32",
+              "/scratch/users/allorana/parquet_separated_parts/sqlite_part33",]
+    outdir = "/scratch/users/allorana/merged_sqlite_1505/meta_test"
 
     converter = ParquetToSQLiteConverter(
         extractors=[
             ParquetExtractor("truth"),
-            ParquetExtractor("InIceDSTPulses"),
+            #ParquetExtractor("InIceDSTPulses"),
             ParquetExtractor("EventGeneratorSelectedRecoNN_I3Particle"),
         ],
         outdir=outdir,
-        num_workers=0,
+        num_workers=4,
     )
     converter(inputs)
     converter.merge_files()

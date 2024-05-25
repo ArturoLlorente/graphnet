@@ -10,24 +10,21 @@ from graphnet.data.pre_configured import ParquetToSQLiteConverter
 def main() -> None:
     """Convert IceCube-86 I3 files to intermediate `backend` format."""
     # Check(s)
+    for i in range(1,10):
+        inputs = [f"/scratch/users/allorana/parquet_separated_parts/sqlite_part{i}",]
+        outdir = f"/scratch/users/allorana/all_truth_parts/part{i}"
 
-    inputs = ["/scratch/users/allorana/parquet_separated_parts/sqlite_part30",
-              "/scratch/users/allorana/parquet_separated_parts/sqlite_part31",
-              "/scratch/users/allorana/parquet_separated_parts/sqlite_part32",
-              "/scratch/users/allorana/parquet_separated_parts/sqlite_part33",]
-    outdir = "/scratch/users/allorana/merged_sqlite_1505/meta_test"
-
-    converter = ParquetToSQLiteConverter(
-        extractors=[
-            ParquetExtractor("truth"),
-            #ParquetExtractor("InIceDSTPulses"),
-            ParquetExtractor("EventGeneratorSelectedRecoNN_I3Particle"),
-        ],
-        outdir=outdir,
-        num_workers=4,
-    )
-    converter(inputs)
-    converter.merge_files()
+        converter = ParquetToSQLiteConverter(
+            extractors=[
+                ParquetExtractor("truth"),
+                #ParquetExtractor("InIceDSTPulses"),
+                #ParquetExtractor("EventGeneratorSelectedRecoNN_I3Particle"),
+            ],
+            outdir=outdir,
+            num_workers=0,
+        )
+        converter(inputs)
+        converter.merge_files()
 
 
 if __name__ == "__main__":

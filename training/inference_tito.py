@@ -90,7 +90,7 @@ class IceCube86TITO(Detector):
         return (x - 1.0e04) / (500.0 * 0.23)
 
     def _charge(self, x: torch.Tensor) -> torch.Tensor:
-        return torch.log10(x)
+        return torch.log10(x) / 3.0
 
     def _rde(self, x: torch.Tensor) -> torch.Tensor:
         return (x - 1.25) / 0.25
@@ -365,7 +365,7 @@ if __name__ == "__main__":
     config["additional_attributes"] = [ "zenith", "azimuth", config["index_column"], "energy"]
     INFERENCE = True
     model_name = "model1"
-    USE_ALL_FEATURES_IN_PREDICTION = True
+    USE_ALL_FEATURES_IN_PREDICTION = False
 
     config['retrain_from_checkpoint'] = MODEL_WEIGHTS[model_name]
 
@@ -493,13 +493,13 @@ if __name__ == "__main__":
         for model_name in MODEL_WEIGHTS.keys():
             all_res = []
             checkpoint_path = MODEL_WEIGHTS[model_name]
-            run_name_pred = f"test_tito_{model_name}"
+            run_name_pred = f"test_tito_{model_name}_newtest"
             
             factor = 1
             pulse_breakpoints = [0, 100, 200, 300, 500, 1000, 5000, 10000]
             batch_sizes_per_pulse = [4800, 2800, 700, 400, 240, 120, 60, 30]
             config["num_workers"] = 4
-            config["fit"]["gpus"] = [2]
+            config["fit"]["gpus"] = [0]
 
         
             for min_pulse, max_pulse in zip(

@@ -30,10 +30,10 @@ PRETRAINED_MODEL_DIR = os.path.join(GRAPHNET_ROOT_DIR, "src", "graphnet", "model
 
 # 5 models 
 MODELS = {'B_d32': DeepIce(hidden_dim=768, seq_length=192, depth=12, head_size=32, n_features=7),
-        'B_d64': DeepIce(hidden_dim=768, seq_length=192, depth=12, head_size=64, n_features=7),
-        'B_d32_4rel': DeepIce(hidden_dim=768, seq_length=192, depth=12, head_size=32, n_features=7, n_rel=4),
-        'S+DynEdge_d32': DeepIce(hidden_dim=384, seq_length=128, depth=8, head_size=32, include_dynedge=True, scaled_emb=True, n_features=7, n_rel=1),
-        'B+DynEdge_d64': DeepIce(hidden_dim=768, seq_length=192, depth=12, head_size=64, include_dynedge=True, scaled_emb=True, n_features=7, n_rel=4)}
+          'B_d64': DeepIce(hidden_dim=768, seq_length=192, depth=12, head_size=64, n_features=7),
+          'B_d32_4rel': DeepIce(hidden_dim=768, seq_length=192, depth=12, head_size=32, n_features=7, n_rel=4),
+          'S+DynEdge_d32': DeepIce(hidden_dim=384, seq_length=128, depth=8, head_size=32, include_dynedge=True, scaled_emb=True, n_features=7, n_rel=1),
+          'B+DynEdge_d64': DeepIce(hidden_dim=768, seq_length=192, depth=12, head_size=64, include_dynedge=True, scaled_emb=True, n_features=7, n_rel=4)}
 
 MODEL_PATH = {'B_d32': PRETRAINED_MODEL_DIR+'/B_d32/baselineV3_BE_globalrel_d32_0_6ema.pth',
               'B_d64': PRETRAINED_MODEL_DIR+'/B_d64/baselineV3_BE_globalrel_d64_0_3emaFT_2.pth',
@@ -43,10 +43,11 @@ MODEL_PATH = {'B_d32': PRETRAINED_MODEL_DIR+'/B_d32/baselineV3_BE_globalrel_d32_
               }
 
 MODEL_WEIGHTS = {'B_d32': 0.08254897,
-                'B_d64': 0.15350807,
-                'B_d32_4rel': 0.19367443,
-                'B+DynEdge_d64': 0.23597202,
-                'S+DynEdge_d32': 0.3342965}
+                 'B_d64': 0.15350807,
+                 'B_d32_4rel': 0.19367443,
+                 'B+DynEdge_d64': 0.23597202,
+                 'S+DynEdge_d32': 0.3342965,
+                 }
 
 def build_model(
     backbone,
@@ -189,14 +190,14 @@ def inference(
 
 # Main function call
 if __name__ == "__main__":
-    
-    icemix_features = ["dom_x", "dom_y", "dom_z", "dom_time", "charge", "hlc", "rde"] # Added rde to the standard. Change the ordering. Important the ordering when using SinusoidalPositionalEmbedding
+     # Added rde to the standard. Change the ordering. Important the ordering when using SinusoidalPosEmb
+    icemix_features = ["dom_x", "dom_y", "dom_z", "dom_time", "charge", "hlc", "rde"]
 
     config = {
-        "archive": "/scratch/users/allorana/test_archive",
+        "archive": "/scratch/users/allorana/icemix_cascades_retrain",
         "target": "direction",
-        "batch_size": 75, # 12 for cascades, 64 for tracks
-        "num_workers": 8,
+        "batch_size": 12, # 12 for cascades, 32 for tracks
+        "num_workers": 4,
         "pulsemap": "InIceDSTPulses",
         "truth_table": "truth",
         "index_column": "event_no",
@@ -213,29 +214,30 @@ if __name__ == "__main__":
         "collate_fn": collator_sequence_buckleting([0.5,0.9]),
         "fit": {"max_epochs": 1, "gpus": [1], "precision": '16-mixed'},
         "optimizer_class": AdamW,
-        "optimizer_kwargs": {"lr": 1e-5, "weight_decay": 0.05, "eps": 1e-7},
-        "scheduler_class": OneCycleLR,
-        "scheduler_kwargs": {"max_lr": 1e-5, "pct_start": 0.01, "anneal_strategy": 'cos', "div_factor": 25, "final_div_factor": 25},
+        "optimizer_kwargs": {"lr": 0.35e-5, "weight_decay": 0.05, "eps": 1e-7}, 
+        "scheduler_class": OneCycleLR, 
+        #"scheduler_kwargs": {"max_lr": 0.5e-5, "pct_start": 0.01, "anneal_strategy": 'cos', "div_factor": 15, "final_div_factor": 15}, #cascades 5e
+        "scheduler_kwargs": {"max_lr": 0.35e-5, "pct_start": 0.01, "anneal_strategy": 'cos', "div_factor": 10, "final_div_factor": 10}, #cascades 5e
+        #"scheduler_kwargs": {"max_lr": 1e-5, "pct_start": 0.01, "anneal_strategy": 'cos', "div_factor": 25, "final_div_factor": 25}, #track 1e
         "scheduler_config": {"frequency": 1, "monitor": "val_loss", "interval": "step"},
-        "ckpt_path": False,
+        "ckpt_path": False, # Continue training from a checkpoint
         "prefetch_factor": 2,
-        "db_backend": "sqlite",
-        "event_type": "track",
-        "retrain_from_checkpoint": None,#'/scratch/users/allorana/icemix_cascades_retrain/retrain_model2_3e_state_dict.pth'
+        "db_backend": "sqlite", # "sqlite" or "parquet"
+        "event_type": "track", # "track" or "cascade
     }
-    INFERENCE = False
+    INFERENCE = True
     model_name = ["B_d32", "B_d64", "B_d32_4rel", "B+DynEdge_d64", "S+DynEdge_d32"]
     model_name = model_name[1]
     
-    config["retrain_from_checkpoint"] = '/scratch/users/allorana/icemix_cascades_retrain/retrain_model2_3e_state_dict.pth'#MODEL_PATH[model_name]
+    config["retrain_from_checkpoint"] = '/scratch/users/allorana/icemix_cascades_retrain/retrain_B_d64_1e_track_state_dict.pth'#MODEL_PATH[model_name]
     
 
     run_name = (
-	f"retrain_{model_name}_3e_cascades_1e_{config['event_type']}"
+	f"retrain_{model_name}_2e_{config['event_type']}"
     )
 
     torch.multiprocessing.set_sharing_strategy("file_system")
-    if INFERENCE:
+    if INFERENCE and config["num_workers"] > 0:
         torch.multiprocessing.set_start_method("spawn") # When using num_workers>1, otherwise it will crash after one epoch. Not needed for OneCycleLR, since it is only 1 epoch
     
 
@@ -274,13 +276,13 @@ if __name__ == "__main__":
                     train_selections.append(None)
                 train_selections_last = pd.read_csv(f'{sqlite_db_dir}/selection_files/part_6.csv')
                 train_selections_last = train_selections_last.loc[(train_selections_last["n_pulses"]), :][config["index_column"]].to_numpy()
-                train_selections[-1] = train_selections_last[:int(len(train_selections_last) * 0.6)]
+                train_selections[-1] = train_selections_last[:int(len(train_selections_last) * 0.5)]
                 val_selection = None
             else:
                 all_databases = f'{sqlite_db_dir}/dev_northern_tracks_muon_labels_v3_part_6.db'
-                test_selections = [pd.read_csv(f'{sqlite_db_dir}/selection_files/part_6.csv')]
-                test_selections = test_selections.loc[(test_selections["n_pulses"]), :][config["index_column"]].to_numpy()
-                test_selections = test_selections[:int(len(test_selections) * 0.6)]
+                test_selections = pd.read_csv(f'{sqlite_db_dir}/selection_files/part_6.csv')
+                #test_selections = test_selections.loc[(test_selections["n_pulses"]), :][config["index_column"]].to_numpy()
+                test_selections = [test_selections[:int(len(test_selections) * 0.5)]]
         elif config["db_backend"] == 'parquet':
             assert False, "parquet backend not implemented for tracks"
         else:
@@ -362,14 +364,14 @@ if __name__ == "__main__":
         )
         model.save_config(os.path.join(config["archive"], f"{run_name}_config.yml"))
     else:
-        for model_i in ['model1', 'model2', 'model3', 'model4', 'model5']: # Possibility to loop over all models
+        for model_i in [model_name]: # Possibility to loop over all models
             all_results = []
-            checkpoint_path = MODEL_PATH[model_i]#'/scratch/users/allorana/icemix_cascades_retrain/retrain_model2_3e_state_dict.pth'
-            run_name_pred = 'testing_pathing'#f"{model_i}_base_{config['event_type']}"
+            checkpoint_path = '/scratch/users/allorana/icemix_cascades_retrain/retrain_B_d64_1e_track_state_dict.pth'
+            run_name_pred = f"{model_i}_1eT_{config['event_type']}"
             test_databases = all_databases
             factor = 0.6 # Factor for the batch size. This was 0.6 is set for H100 100GB
             pulse_breakpoints =     [0, 100,   200, 300, 500,  1000, 2000, 3000, 10000000]
-            batch_sizes_per_pulse = [4800, 2800,  700, 350,  90,   20,   10,   15]
+            batch_sizes_per_pulse = [4800, 2800,  700, 350,  90,   20,   15,   15]
         
             for min_pulse, max_pulse in zip(
                 pulse_breakpoints[:-1], pulse_breakpoints[1:]

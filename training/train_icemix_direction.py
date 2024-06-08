@@ -140,7 +140,7 @@ def inference(
             model.load_state_dict(new_checkpoint)
             model.to(cuda_device)
             models.append(model)
-            weights.append(MODEL_WEIGHTS[f"model{i}"])
+            weights.append(MODEL_WEIGHTS[model_i])
     else:
         model = build_model(backbone=MODELS[model_name], config=config)
         model.eval()
@@ -164,7 +164,8 @@ def inference(
     
     with torch.no_grad():
         for batch in tqdm(test_dataloader):
-            pred = (torch.stack([torch.nan_to_num(model(batch.to(cuda_device))[0]).clip(-1000, 1000) for model in models], -1).cpu() * weights).sum(-1)
+            batch_cuda = batch.to(cuda_device)
+            pred = (torch.stack([torch.nan_to_num(model(batch_cuda)[0]).clip(-1000, 1000) for model in models], -1).cpu() * weights).sum(-1)
             preds.append(pred)
             event_nos.append(batch.event_no)
             zenith.append(batch.zenith)
@@ -196,8 +197,8 @@ if __name__ == "__main__":
     config = {
         "archive": "/scratch/users/allorana/icemix_cascades_retrain",
         "target": "direction",
-        "batch_size": 12, # 12 for cascades, 32 for tracks
-        "num_workers": 4,
+        "batch_size": 12, # 12 for cascades, 16 for tracks
+        "num_workers": 8,
         "pulsemap": "InIceDSTPulses",
         "truth_table": "truth",
         "index_column": "event_no",
@@ -212,28 +213,29 @@ if __name__ == "__main__":
         "truth": ["energy", "energy_track", "position_x", "position_y", "position_z", "azimuth", "zenith", "pid", "elasticity", "interaction_type"],
         "columns_nearest_neighbours": [0, 1, 2], # [0, 1, 2, 3] for model5
         "collate_fn": collator_sequence_buckleting([0.5,0.9]),
-        "fit": {"max_epochs": 1, "gpus": [1], "precision": '16-mixed'},
+        "fit": {"max_epochs": 1, "gpus": [0], "precision": '16-mixed'},
         "optimizer_class": AdamW,
         "optimizer_kwargs": {"lr": 0.35e-5, "weight_decay": 0.05, "eps": 1e-7}, 
         "scheduler_class": OneCycleLR, 
         #"scheduler_kwargs": {"max_lr": 0.5e-5, "pct_start": 0.01, "anneal_strategy": 'cos', "div_factor": 15, "final_div_factor": 15}, #cascades 5e
-        "scheduler_kwargs": {"max_lr": 0.35e-5, "pct_start": 0.01, "anneal_strategy": 'cos', "div_factor": 10, "final_div_factor": 10}, #cascades 5e
+        "scheduler_kwargs": {"max_lr": 0.35e-5, "pct_start": 0.01, "anneal_strategy": 'cos', "div_factor": 10, "final_div_factor": 10}, #cascades 6e, 7e, 8e
         #"scheduler_kwargs": {"max_lr": 1e-5, "pct_start": 0.01, "anneal_strategy": 'cos', "div_factor": 25, "final_div_factor": 25}, #track 1e
+        #"scheduler_kwargs": {"max_lr": 0.5e-5, "pct_start": 0.01, "anneal_strategy": 'cos', "div_factor": 10, "final_div_factor": 10}, #track 2e
         "scheduler_config": {"frequency": 1, "monitor": "val_loss", "interval": "step"},
         "ckpt_path": False, # Continue training from a checkpoint
         "prefetch_factor": 2,
         "db_backend": "sqlite", # "sqlite" or "parquet"
-        "event_type": "track", # "track" or "cascade
+        "event_type": "cascade", # "track" or "cascade
     }
     INFERENCE = True
     model_name = ["B_d32", "B_d64", "B_d32_4rel", "B+DynEdge_d64", "S+DynEdge_d32"]
     model_name = model_name[1]
-    
-    config["retrain_from_checkpoint"] = '/scratch/users/allorana/icemix_cascades_retrain/retrain_B_d64_1e_track_state_dict.pth'#MODEL_PATH[model_name]
+    if not INFERENCE:
+        config["retrain_from_checkpoint"] = config['archive'] + '/retrain_B_d64_7e_cascade_state_dict.pth'
     
 
     run_name = (
-	f"retrain_{model_name}_2e_{config['event_type']}"
+	f"retrain_{model_name}_8e_{config['event_type']}"
     )
 
     torch.multiprocessing.set_sharing_strategy("file_system")
@@ -364,10 +366,10 @@ if __name__ == "__main__":
         )
         model.save_config(os.path.join(config["archive"], f"{run_name}_config.yml"))
     else:
-        for model_i in [model_name]: # Possibility to loop over all models
+        for model_i in [model_name]:#["B_d32", "B_d64", "B_d32_4rel", "B+DynEdge_d64", "S+DynEdge_d32"]: # Possibility to loop over all models
             all_results = []
-            checkpoint_path = '/scratch/users/allorana/icemix_cascades_retrain/retrain_B_d64_1e_track_state_dict.pth'
-            run_name_pred = f"{model_i}_1eT_{config['event_type']}"
+            checkpoint_path = config['archive'] + '/retrain_B_d32_4rel_2e_track_state_dict.pth'
+            run_name_pred = f"{model_i}_2e_{config['event_type']}"
             test_databases = all_databases
             factor = 0.6 # Factor for the batch size. This was 0.6 is set for H100 100GB
             pulse_breakpoints =     [0, 100,   200, 300, 500,  1000, 2000, 3000, 10000000]

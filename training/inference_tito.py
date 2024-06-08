@@ -33,7 +33,7 @@ from graphnet.models.gnn import DynEdgeTITO
 from graphnet.constants import ICECUBE_GEOMETRY_TABLE_DIR
 
 
-from utils import make_dataloaders
+from utils import make_dataloaders, rename_state_dict_keys
 
 
 GNN_KWARGS = {"model1": {"dyntrans_layer_sizes":  [(256, 256), (256, 256), (256, 256), (256, 256)], "global_pooling_schemes": ["max"] , "use_global_features": True, "use_post_processing_layers": True},
@@ -102,33 +102,6 @@ class IceCube86TITO(Detector):
         return torch.where(
             torch.eq(x, 0), torch.ones_like(x), torch.ones_like(x) * 0
         )
-
-def rename_state_dict_keys(model, checkpoint):
-    i, passed_keys = 0, 0
-    new_checkpoint = {}
-    model_keys = list(model.state_dict().keys())
-    checkpoint_keys = list(checkpoint.keys())
-    
-    if (model_keys == checkpoint_keys) or checkpoint_keys[0].startswith('_gnn.'):
-        new_checkpoint = checkpoint
- 
-    else:
-        for m_k in model_keys:
-            if m_k == '_tasks.0._affine.weight':
-                v = checkpoint['proj_out.weight']
-                new_checkpoint[m_k] = v
-                
-            elif m_k == '_tasks.0._affine.bias':
-                v = checkpoint['proj_out.bias']
-                new_checkpoint[m_k] = v
-                
-            else: 
-                if checkpoint_keys[i] == 'proj_out.weight':
-                    passed_keys += 2
-                v = checkpoint[checkpoint_keys[i+passed_keys]]
-                new_checkpoint[m_k] = v
-                i+=1  
-    return new_checkpoint
 
 class DirectionReconstructionWithKappaTITO(Task):
     default_target_labels = ["direction"]
@@ -335,13 +308,11 @@ if __name__ == "__main__":
         "archive": "/scratch/users/allorana/tito_cascades_retrain",
         "target": "direction",
         "batch_size": 28,
-        "num_workers": 16,
-        "num_database_files": 28,# total files 34. 28 for training, 1 for validation and 5 for testing
+        "num_workers": 4,
         "pulsemap": "InIceDSTPulses",
         "truth_table": "truth",
         "index_column": "event_no",
         "labels": {"direction": Direction()},
-        "num_database_files": 8,
         "accumulate_grad_batches": {0: 2},
         "persistent_workers": True,
         "detector": IceCube86TITO(),
@@ -352,20 +323,20 @@ if __name__ == "__main__":
         "columns_nearest_neighbours": [0, 1, 2],
         "collate_fn": collator_sequence_buckleting([0.8]),
         "prediction_columns": ["dir_x_pred", "dir_y_pred", "dir_z_pred", "dir_kappa_pred"],
-        "fit": {"max_epochs": 100, "gpus": [0,1,2,3], "precision": '16-mixed'},
+        "fit": {"max_epochs": 100, "gpus": [1], "precision": '16-mixed'},
         "optimizer_class": Adam,
         "optimizer_kwargs": {"lr": 1e-5, "weight_decay": 0.05, "eps": 1e-7},
         "scheduler_class": PiecewiseLinearLR,
         "scheduler_config": {"interval": "step"},
         "ckpt_path": False,
-        "db_backend": "sqlite",
         "prefetch_factor": 2,
-        #"model_name": 'model2',
-    }
+        "db_backend": "sqlite", # "sqlite" or "parquet"
+        "event_type": "track", # "track" or "cascade
+        }
     config["additional_attributes"] = [ "zenith", "azimuth", config["index_column"], "energy"]
     INFERENCE = True
     model_name = "model1"
-    USE_ALL_FEATURES_IN_PREDICTION = False
+    USE_ALL_FEATURES_IN_PREDICTION = True
 
     config['retrain_from_checkpoint'] = MODEL_WEIGHTS[model_name]
 
@@ -380,29 +351,58 @@ if __name__ == "__main__":
 
     # Configurations
     torch.multiprocessing.set_sharing_strategy("file_system")
-    #torch.multiprocessing.set_start_method("spawn")
+    if INFERENCE:
+        torch.multiprocessing.set_start_method("spawn")
 
-    all_databases, test_databases, test_selections = [],[],[]
-    if config["db_backend"] == "sqlite":
-        sqlite_db_dir = '/scratch/users/allorana/merged_sqlite_1505'
-        if not INFERENCE:
-            for i in range(28):
-                all_databases.append(f'{sqlite_db_dir}/part{i+1}/merged/merged.db')
-            train_selections = None
-            val_selection = None
+
+    if config["event_type"] == "cascade":
+        all_databases, test_databases = [],[]
+        test_selections, train_selections = [],[]
+        if config["db_backend"] == "sqlite":
+            # total files 34. 29 for training, 1 for validation and 4 for testing. No validation used for OneCycleLR
+            sqlite_db_dir = '/scratch/users/allorana/merged_sqlite_1505/DNNCascadeL4_NuGen' 
+            if not INFERENCE:
+                for i in range(30): 
+                    all_databases.append(f'{sqlite_db_dir}/DNNCascadeL4_NuGen_part{i}.db')
+                    train_selections.append(None)
+                val_selection = None
+            else:
+                for i in range(30,34):
+                    all_databases.append(f'{sqlite_db_dir}/DNNCascadeL4_NuGen_part{i}.db')  
+                    test_selections.append(pd.read_csv(f'{sqlite_db_dir}/selection_files/part{i}_n_pulses.csv'))
+
+        elif config["db_backend"] == "parquet":
+            all_selections = list(range(1000))
+            all_databases = '/scratch/users/allorana/parquet_small/merged'
+            train_val_selection = all_selections[:int(len(all_selections) * 0.9)]
+            train_selections = train_val_selection[:-1]
+            val_selection = train_val_selection[-1:]
+        
+            test_selection = all_selections[int(len(all_selections) * 0.9):]
+    elif config["event_type"] == "track":
+        train_selections = []
+        sqlite_db_dir = '/scratch/users/allorana/northern_sqlite/old_files'
+        if config["db_backend"] == 'sqlite':
+            if not INFERENCE:
+                all_databases = []
+                for i in range(6):
+                    all_databases.append(f'{sqlite_db_dir}/dev_northern_tracks_muon_labels_v3_part_{i+1}.db') 
+                    train_selections.append(None)
+                train_selections_last = pd.read_csv(f'{sqlite_db_dir}/selection_files/part_6.csv')
+                train_selections_last = train_selections_last.loc[(train_selections_last["n_pulses"]), :][config["index_column"]].to_numpy()
+                train_selections[-1] = train_selections_last[:int(len(train_selections_last) * 0.5)]
+                val_selection = None
+            else:
+                all_databases = f'{sqlite_db_dir}/dev_northern_tracks_muon_labels_v3_part_6.db'
+                test_selections = pd.read_csv(f'{sqlite_db_dir}/selection_files/part_6.csv')
+                #test_selections = test_selections.loc[(test_selections["n_pulses"]), :][config["index_column"]].to_numpy()
+                test_selections = [test_selections[:int(len(test_selections) * 0.5)]]
+        elif config["db_backend"] == 'parquet':
+            assert False, "parquet backend not implemented for tracks"
         else:
-            for i in range(29,33):
-                test_databases.append(f'{sqlite_db_dir}/part{i+1}/merged/merged.db')  
-                test_selections.append(pd.read_csv(f'{sqlite_db_dir}/selection_files/part{i+1}_n_pulses.csv'))
-
-    elif config["db_backend"] == "parquet":
-        all_selections = list(range(1000))
-        all_databases = '/scratch/users/allorana/parquet_really_small/merged'#'/scratch/users/allorana/parquet_small/merged/'
-        train_val_selection = all_selections[:int(len(all_selections) * 0.9)]
-        train_selections = train_val_selection[:-1]
-        val_selection = train_val_selection[-1:]
-    
-        test_selection = all_selections[int(len(all_selections) * 0.9):]
+            assert False, "backend not recognized"                
+    else:
+        assert False, "event_type not recognized"
 
     
     config["graph_definition"] = KNNGraph(
@@ -489,17 +489,15 @@ if __name__ == "__main__":
         )
         print(f"Model saved to {config['archive']}/{run_name}.pth")
     else:
-        torch.multiprocessing.set_start_method("spawn")
         for model_name in MODEL_WEIGHTS.keys():
             all_res = []
             checkpoint_path = MODEL_WEIGHTS[model_name]
-            run_name_pred = f"test_tito_{model_name}_newtest"
-            
-            factor = 1
+            run_name_pred = f"{model_name}_baseline_{config['event_type']}"
+            test_databases = all_databases
+
+            factor = 0.6
             pulse_breakpoints = [0, 100, 200, 300, 500, 1000, 5000, 10000]
             batch_sizes_per_pulse = [4800, 2800, 700, 400, 240, 120, 60, 30]
-            config["num_workers"] = 4
-            config["fit"]["gpus"] = [0]
 
         
             for min_pulse, max_pulse in zip(

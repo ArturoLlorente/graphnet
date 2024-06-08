@@ -164,7 +164,7 @@ def rename_state_dict_keys(model, checkpoint):
     model_keys = list(model.state_dict().keys())
     checkpoint_keys = list(checkpoint.keys())
     
-    if (model_keys == checkpoint_keys): # If the keys are the same no need to rename
+    if (model_keys == checkpoint_keys) or checkpoint_keys[0].startswith('_gnn.'): # If the keys are the same no need to rename
         new_checkpoint = checkpoint
     else:
         for model_k in model_keys: # Iterate over the model keys

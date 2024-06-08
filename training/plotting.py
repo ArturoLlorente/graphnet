@@ -187,6 +187,8 @@ class sensitivity_plots_jupyter:
                             plot_pulses: Optional[str] = False,
                             include_sigma: bool = True,
                             title: str = 'IceCube Simulation',
+                            include_spline_residual: bool = False,
+                            savename: str = 'sensitivity_plot.png',
                             ):
         
         
@@ -240,6 +242,18 @@ class sensitivity_plots_jupyter:
             ax = fig.add_subplot(gs[0:, :-4])
             ax_histx = None
             ax2 = fig.add_subplot(gs[0:8, 6:])
+        elif include_spline_residual == 'add':
+            gs = fig.add_gridspec(12, 6)
+            ax = fig.add_subplot(gs[0:8, :])
+            ax_histx = None
+            ax2 = None
+            ax_spline_res = fig.add_subplot(gs[8:12, :])
+        elif include_spline_residual == 'only':
+            gs = fig.add_gridspec(12, 6)
+            ax = fig.add_subplot(gs[0:12, :])
+            ax_histx = None
+            ax2 = None
+            ax_spline_res = fig.add_subplot(gs[:, :])
         else:
             gs = fig.add_gridspec(8, 6)
             ax = fig.add_subplot(gs[0:, :6])
@@ -306,6 +320,7 @@ class sensitivity_plots_jupyter:
                 if ax2 is not None:
                     ax2.set_xlabel('Truth - Reco. [deg.]', size = font_size)
                 ax.set_ylabel('Zenith Resolution [deg.]', size = font_size)
+                ax.axhline(0, ls='--', color='grey')
             elif key == 'azimuth':
                 if idx == spline_idx:
                     residual['SplineMPE'] = (np.rad2deg(df_i['azimuth'] - df_i['azimuth_spline_mpe_ic']))
@@ -317,6 +332,7 @@ class sensitivity_plots_jupyter:
                 if ax2 is not None:
                     ax2.set_xlabel('Truth - Reco. [deg.]', size = font_size)
                 ax.set_ylabel('Zenith Resolution [deg.]', size = font_size)
+                ax.axhline(0, ls='--', color='grey')
             elif key == 'direction':
                 if idx == spline_idx:
                     residual['SplineMPE'] = self._calculate_opening_angle(df_i, key = 'spline')
@@ -327,7 +343,7 @@ class sensitivity_plots_jupyter:
                 key_bins = np.arange(0, 120, 1)
                 if ax2 is not None:
                     ax2.set_xlabel('Opening Angle [deg.]', size = font_size)
-                ax.set_ylabel('Opening Angle [deg.]', size = font_size)
+                ax.set_ylabel(r'Opening Angle [$^\circ$]', size = font_size)
             else:
                 assert KeyError, "key must be 'energy', 'zenith', 'azimuth' or 'direction'"
 
@@ -356,18 +372,47 @@ class sensitivity_plots_jupyter:
                     else:
                         if ls != '--':
                             ax.plot(10**percentile_calculations[event_type][pred_name]['mean'], percentile_calculations[event_type][pred_name][percentile], label=None, ls=ls, color=percentile_calculations[event_type][pred_name]['colour'])
+                    #ax.fill_between(10**percentile_calculations[event_type][pred_name]['mean'], 0, percentile_calculations[event_type][pred_name]['p_50'], alpha=0.05, color=percentile_calculations[event_type][pred_name]['colour'])
                     if ls == '--' and include_sigma:
-                        ax.fill_between(10**percentile_calculations[event_type][pred_name]['mean'], percentile_calculations[event_type][pred_name]['p_16'], percentile_calculations[event_type][pred_name]['p_84'], alpha=0.1, color=percentile_calculations[event_type][pred_name]['colour'])
+                        #ax.fill_between(10**percentile_calculations[event_type][pred_name]['mean'], percentile_calculations[event_type][pred_name]['p_16'], percentile_calculations[event_type][pred_name]['p_84'], alpha=0.1, color=percentile_calculations[event_type][pred_name]['colour'])
+                        ax.fill_between(10**percentile_calculations[event_type][pred_name]['mean'], 0, percentile_calculations[event_type][pred_name]['p_84'], alpha=0.05, color=percentile_calculations[event_type][pred_name]['colour'])
+                        ax.fill_between(10**percentile_calculations[event_type][pred_name]['mean'], 0, percentile_calculations[event_type][pred_name]['p_16'], alpha=0.05, color=percentile_calculations[event_type][pred_name]['colour'])
 
+
+                    if include_spline_residual and (pred_name != 'SplineMPE' and pred_name != 'EventGen'):
+                        if cascades_in_dataset:
+                            diff_a = percentile_calculations[event_type][pred_name]['p_50'] / percentile_calculations[event_type]['EventGen']['p_50']
+                            diff_b = percentile_calculations[event_type][pred_name]['p_50'] / percentile_calculations[event_type]['EventGen']['p_50']
+                        elif tracks_in_dataset:
+                            diff_a = percentile_calculations[event_type][pred_name]['p_50'] / percentile_calculations[event_type]['SplineMPE']['p_50']
+                            diff_b = percentile_calculations[event_type][pred_name]['p_50'] / percentile_calculations[event_type]['SplineMPE']['p_50']
+
+                        ax_spline_res.step(10**percentile_calculations[event_type][pred_name]['mean'], diff_a, label=None, color=percentile_calculations[event_type][pred_name]['colour'], where='mid')
+                        ax_spline_res.step(10**percentile_calculations[event_type][pred_name]['mean'], diff_b, label=None, color=percentile_calculations[event_type][pred_name]['colour'], where='mid')
+
+                        ax_spline_res.axhline(1, ls='--', color='grey')
+                        ax_spline_res.set_xscale('log')
+                        ax_spline_res.set_ylabel(r'$\frac{Pred_{NN}}{Pred_{EventGen}}$', size = font_size)
+                        plt.legend()
+            
         
-        if include_median:
-            ax.plot(np.nan, np.nan, label = 'Median', ls = '-', color = 'grey')
         if include_sigma:
             ax.fill_between([],[],[], alpha=0.3, color='grey', label = '84% percetile')
+            if include_median:
+                ax.plot(np.nan, np.nan, label = 'Median', ls = '-', color = 'grey')
             
+        if include_spline_residual != 'only':
+            ax.legend(frameon = False, fontsize = 9, ncol = ncols, bbox_to_anchor=legend_bbox, loc='upper right')
+            
+        if include_spline_residual:
+            ax_spline_res.set_xlabel('True Energy [GeV]', size = font_size)
+            if xlims is not None:
+                ax_spline_res.set_xlim(xlims[0], xlims[1])
 
-        ax.legend(frameon = False, fontsize = font_size, ncol = ncols, bbox_to_anchor=legend_bbox)
-        ax.set_xlabel('True Energy [GeV]', size = font_size)
+        else:
+            ax.set_xlabel('True Energy [GeV]', size = font_size)
+            
+            
         if ax2 is not None:
             for idx, df_i in enumerate(df):
                 key_df = keys_df[idx]
@@ -401,6 +446,10 @@ class sensitivity_plots_jupyter:
             ax2.yaxis.tick_right()
         #plt.suptitle(f'{key.capitalize()}', size = font_size)
         ax.set_xscale('log')
+        
+        if include_spline_residual:
+            ax.set_xticklabels([])
+            ax.set_xticks([])
 
         if plot_pulses:
             pulses_df = pd.read_csv(plot_pulses)
@@ -431,15 +480,16 @@ class sensitivity_plots_jupyter:
             
             
         event_topo = 'Northern Tracks' if tracks_in_dataset else 'DNN Cascades'
-        plt.title(title, size = font_size)
+        ax.set_title(title, size = font_size)
+        #ax.set_yscale('log')
         plt.rcParams['xtick.labelsize'] = 10
         plt.rcParams['ytick.labelsize'] = 10 
         plt.rcParams['axes.labelsize'] = 10
         plt.rcParams['axes.titlesize'] = 12
-        plt.rcParams['legend.fontsize'] = 10
+        plt.rcParams['legend.fontsize'] = 8
         #plt.text(x = text_loc[0], y = text_loc[1], s = "IceCube Simulation", fontsize = 12)
-        fig.savefig(f'{event_topo} {key} 5epochs.png')
-        print(f'Saved as {event_topo} {key} 5epochs.png')
+        fig.savefig(savename, dpi=300)
+        print(f'Saved as: {savename}')
         
         return None
 
@@ -465,34 +515,70 @@ if __name__ == '__main__':
           #pd.read_csv(f'{cascades_icemix_path}/model5_baseline_newtest.csv'), # base model5 benchmarket with the new test data
           #pd.read_csv(f'{cascades_icemix_path}/model5_baseline_newtest.csv'),  # base tito model5 new test
           #pd.read_csv(f'{cascades_icemix_path}/model1_baseline_newtest.csv'), # base tito model1 new test
-          pd.read_csv(f'{cascades_icemix_path}/model2_base_newtest.csv'), # base model2 benchmarket with the new test data
-          pd.read_csv(f'{cascades_icemix_path}/model2_1e_newtest.csv'),   # retrained 1 epoch model2 benchmarket with the new test data
-          #pd.read_csv(f'{cascades_icemix_path}/model2_2epochs.csv'), # retrained 2 epoch model2 benchmarket with the new test data
-          pd.read_csv(f'{cascades_icemix_path}/model2_3e_cascade.csv'), # retrained 3 epoch model2 benchmarket with the new test data
-          pd.read_csv(f'{cascades_icemix_path}/B_d64_4e_cascade.csv'), # retrained 3 epoch model2 benchmarket with the new test data
-          pd.read_csv(f'{cascades_icemix_path}/B_d64_5e_cascade.csv'), # retrained 3 epoch model2 benchmarket with the new test data
-          #pd.read_csv(f'{cascades_icemix_path}/B_d64_4e_cascade_1e_track.csv'), # 4epochs on cascades and 1 epoch on tracks --> tracks
-          #pd.read_csv('/scratch/users/allorana/prediction_cascades_icemix/B_d64_4e_cascade_on_track.csv'), # 4 epochs cascades on tracks
-          #pd.read_csv('/scratch/users/allorana/prediction_cascades_icemix/B_d64_4e_cascade_1e_track_on_cascade.csv'), # 4epochs on cascades and 1 epoch on tracks --> cascades
-          #pd.read_csv('/scratch/users/allorana/prediction_cascades_icemix/model1_base_track.csv'), # base model1 benchmarket with the track db1
-          #pd.read_csv('/scratch/users/allorana/prediction_cascades_icemix/model2_base_track.csv'), # base model2 benchmarket with the track db1
-          #pd.read_csv('/scratch/users/allorana/prediction_cascades_icemix/model3_base_track.csv'), # base model3 benchmarket with the track db1
-          #pd.read_csv('/scratch/users/allorana/prediction_cascades_icemix/model4_base_track.csv'), # base model4 benchmarket with the track db1
-          #pd.read_csv('/scratch/users/allorana/prediction_cascades_icemix/model5_base_track.csv'), # base model5 benchmarket with the track db1
           
+          #pd.read_csv(f'{cascades_icemix_path}/model2_base_newtest.csv'), # base model2 benchmarket with the new test data
+          #pd.read_csv(f'{cascades_icemix_path}/model2_1e_newtest.csv'),   # retrained 1 epoch model2 benchmarket with the new test data
+          #pd.read_csv(f'{cascades_icemix_path}/model2_2epochs.csv'), # retrained 2 epoch model2 benchmarket with the new test data
+          #pd.read_csv(f'{cascades_icemix_path}/model2_3e_cascade.csv'), # retrained 3 epoch model2 benchmarket with the new test data
+          #pd.read_csv(f'{cascades_icemix_path}/B_d64_4e_cascade.csv'), # retrained 4 epoch model2 benchmarket with the new test data
+          #pd.read_csv(f'{cascades_icemix_path}/B_d64_5e_cascade.csv'), # retrained 5 epoch model2 benchmarket with the new test data
+          #pd.read_csv(f'{cascades_icemix_path}/B_d64_6e_cascade.csv'), # retrained 6 epoch model2 benchmarket with the new test data
+          #pd.read_csv(f'{cascades_icemix_path}/B_d64_7e_cascade.csv'), # retrained 6 epoch model2 benchmarket with the new test data
+          #pd.read_csv(f'{cascades_icemix_path}/B_d64_4e_cascade_1e_track.csv'), # 4epochs on cascades and 1 epoch on tracks --> tracks
+          
+          #pd.read_csv(f'{cascades_icemix_path}/B_d64_4e_cascade_on_track.csv'), # 4 epochs cascades on tracks
+          #pd.read_csv(f'{cascades_icemix_path}/B_d64_4e_cascade_1e_track_on_cascade.csv'), # 4epochs on cascades and 1 epoch on tracks --> cascades
+          #pd.read_csv(f'{cascades_icemix_path}/B_d32_baseline_track.csv'), # baseline B_d32 --> tracks
+          #pd.read_csv(f'{cascades_icemix_path}/B_d64_baseline_track.csv'), # baseline B_d64 --> tracks
+          #pd.read_csv(f'{cascades_icemix_path}/B_d32_4rel_baseline_track.csv'), # baseline B_d32_4rel --> tracks
+          #pd.read_csv(f'{cascades_icemix_path}/B_d32_4rel_1e_track.csv'), # trained_1epoc model3 benchmarket with the track db6
+
+          #pd.read_csv(f'{cascades_icemix_path}/B+DynEdge_d64_baseline_track.csv'), # baseline B+DynEdge_d64_baseline_track --> tracks
+          #pd.read_csv(f'{cascades_icemix_path}/S+DynEdge_d32_baseline_track.csv'), # baseline S+DynEdge_d32_baseline_track --> tracks
+          #pd.read_csv(f'{cascades_icemix_path}/all_baseline_track.csv'), # stacked baselines --> tracks
+          #pd.read_csv(f'{cascades_icemix_path}/B_d64_1eT_track.csv'), # 1 epoch tracks --> tracks
+          
+          #pd.read_csv(f'{cascades_icemix_path}/model1_base_track.csv'), # base model1 benchmarket with the track db1
+          #pd.read_csv(f'{cascades_icemix_path}/model3_base_track.csv'), # base model3 benchmarket with the track db1
+          #pd.read_csv(f'{cascades_icemix_path}/model4_base_track.csv'), # base model4 benchmarket with the track db1
+          #pd.read_csv(f'{cascades_icemix_path}/model5_base_track.csv'), # base model5 benchmarket with the track db1
+        
+          #pd.read_csv(f'{cascades_tito_path}/test_tito_model1_newtest.csv'), # TITO model 1 on cascades
+          #pd.read_csv(f'{cascades_tito_path}/test_tito_model2_newtest.csv'), # TITO model 2 on cascades
+          #pd.read_csv(f'{cascades_tito_path}/test_tito_model3_newtest.csv'), # TITO model 3 on cascades
+          #pd.read_csv(f'{cascades_tito_path}/test_tito_model4_newtest.csv'), # TITO model 4 on cascades
+          #pd.read_csv(f'{cascades_tito_path}/test_tito_model5_newtest.csv'), # TITO model 5 on cascades
+          #pd.read_csv(f'{cascades_tito_path}/test_tito_model6_newtest.csv'), # TITO model 6 on cascades
+          
+          
+          # ceph data
+          #pd.read_csv('/scratch/users/allorana/ceph_data/IceMix_solution_northern/pred_icemix_model5_basemodel.csv'),
+          #pd.read_csv('/scratch/users/allorana/ceph_data/IceMix_solution_northern/pred_icemix_model5_test_retrain.csv'),
+          #pd.read_csv('/scratch/users/allorana/ceph_data/IceMix_solution_northern/pred_icemix_model5_baseline_full.csv'),
+          #pd.read_csv('/scratch/users/allorana/ceph_data/IceMix_solution_northern/pred_icemix_model5_2e.csv'),
+          #pd.read_csv('/scratch/users/allorana/ceph_data/IceMix_solution_northern/pred_icemix_model5_3e.csv'),
+          
+          # tito all features tracks
+          pd.read_csv(f'{cascades_tito_path}/model1_baseline_track_light.csv'),
+          pd.read_csv(f'{cascades_tito_path}/model2_baseline_track_light.csv'),
+          pd.read_csv(f'{cascades_tito_path}/model3_baseline_track_light.csv'),
+          pd.read_csv(f'{cascades_tito_path}/model4_baseline_track_light.csv'),
+          pd.read_csv(f'{cascades_tito_path}/model5_baseline_track_light.csv'),
+          pd.read_csv(f'{cascades_tito_path}/model6_baseline_track_light.csv'),
           
           ]
+    
     db_cascades = '/scratch/users/allorana/merged_sqlite_1505/meta_test/test_merged_meta.db'
     pulse_meta = False#'/scratch/users/allorana/merged_sqlite_1505/meta_test/merged_n_pulses.csv'
-    db_tracks = '/scratch/users/allorana/northern_sqlite/old_files/dev_northern_tracks_muon_labels_v3_part_1.db'
-    df_labels = ['baseline', '1e','3e',  '4e', '5e']
-    
-    #df = [df[0], df[-1]]
-    #df_labels = [df_labels[0], df_labels[-1]]
+    db_tracks = '/scratch/users/allorana/northern_sqlite/old_files/dev_northern_tracks_muon_labels_v3_part_6.db'
+    #db_tracks = '/scratch/users/allorana/northern_sqlite/old_files/dev_northern_tracks_muon_labels_v3_part_5.db' # ceph data
+    df_labels = ['model1', 'model2', 'model3', 'model4', 'model5', 'model6']
 
-    dir_x = 'direction_y'
-    dir_y = 'direction_x'
-    sp = sensitivity_plots_jupyter(df, df_labels, db_cascades, x_pred_label = dir_x, y_pred_label = dir_y, z_pred_label = 'direction_z')
+
+    dir_x = 'direction_x'
+    dir_y = 'direction_y'
+    dir_z = 'direction_z'
+    sp = sensitivity_plots_jupyter(df, df_labels, db_tracks, x_pred_label = dir_x, y_pred_label = dir_y, z_pred_label = dir_z)
 
     #x_pred_label, y_pred_label, z_pred_label = 'direction_y', 'direction_x', 'direction_z'
 
@@ -501,13 +587,17 @@ if __name__ == '__main__':
                                 include_median = True,
                                 include_energy_hist = False,
                                 step = True,
+                                ncols=2,
                                 include_residual_hist = False,
-                                cascades_in_dataset = True,
-                                tracks_in_dataset=False,
+                                cascades_in_dataset = False,
+                                tracks_in_dataset=True,
                                 compare_likelihood = True,
-                                ylims = [5, 15],
+                                #ylims = [-10, 2],
                                 #xlims=[10**4, 10**6.3],
                                 plot_pulses=pulse_meta,
                                 include_sigma=False,
-                                title=f'{key} Resolution on DNN Cascades',
+                                title=f'Median of {key} reconstruction TITO Model',
+                                include_spline_residual = False, # add/only
+                                savename = 'all_tracks_tito.png',
+                                font_size=13
                                 )

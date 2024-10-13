@@ -1,9 +1,11 @@
 from typing import Dict, List, Optional, Union, Any, Callable
 import os
+import numpy as np
+import pandas as pd
 import torch
 from torch.utils.data import DataLoader
 
-from graphnet.data.dataset import EnsembleDataset
+from graphnet.data.dataset import EnsembleDataset, Dataset
 from graphnet.data.dataset import SQLiteDataset, ParquetDataset
 from graphnet.models.detector.detector import Detector
 
@@ -183,3 +185,65 @@ def rename_state_dict_keys(model, checkpoint):
                 new_checkpoint[model_k] = ckpt_value
                 ckpt_key_idx+=1  
     return new_checkpoint
+
+def convert_horizontal_to_direction(azimuth, zenith):
+    dir_z = np.cos(zenith)
+    dir_x = np.sin(zenith) * np.cos(azimuth)
+    dir_y = np.sin(zenith) * np.sin(azimuth)
+    return dir_x, dir_y, dir_z
+
+
+class DatasetStacking(torch.utils.data.Dataset):
+    def __init__(self,
+                 target_columns: Union[List[str], str] = ["direction_x", "direction_y", "direction_z", "direction_kappa"],
+                 model_preds: Union[pd.DataFrame, List[pd.DataFrame]] = None,
+                 use_mid_features: bool = True,
+                 ):
+        
+    
+                
+        if isinstance(model_preds, pd.DataFrame):
+            self.model_preds = [model_preds]
+        else:
+            self.model_preds = model_preds
+                
+        self.target_columns = target_columns
+        self.use_mid_features = use_mid_features
+        
+            
+        x = []
+        for model_pred in self.model_preds:
+            model_pred.sort_values("event_no", inplace=True)
+            columns = self.target_columns
+            if "direction_kappa" in model_pred.columns:
+                model_pred["direction_kappa"]=np.log1p(model_pred["direction_kappa"])
+            if "direction_kappa1" in model_pred.columns:
+                model_pred["direction_kappa1"]=np.log1p(model_pred["direction_kappa1"])
+                #columns = columns + ["direction_x1", "direction_y1", "direction_z1", "direction_kappa1"]
+            if self.use_mid_features:
+                columns = columns + ["idx"+str(i) for i in range(128)]
+            x.append(model_pred[columns].reset_index(drop=True))
+            #y.append(np.stack(convert_horizontal_to_direction(model_pred["azimuth"], model_pred["zenith"])).T)
+            #event_ids.append(model_pred["event_id"].values)
+            #idx1.append(np.full(len(model_pred),idx))
+            #idx2.append(np.arange(len(model_pred)))
+        self.Y = np.stack(convert_horizontal_to_direction(model_pred["azimuth"], model_pred["zenith"])).T
+        self.event_ids = model_pred["event_no"].values
+            
+        self.X = pd.concat(x, axis=1).values
+       
+        #self.X = pd.concat(x, axis=1)        
+            
+    def __len__(self):
+        return self.X.shape[0]
+    
+    def n_columns(self):
+        return self.X.shape[1]
+    
+    def __getitem__(self, index):
+        #idx1 = self.idx1[index]
+        #idx2 = self.idx2[index]
+        x = self.X[index]
+        y = self.Y[index]
+        event_id = self.event_ids[index]
+        return x, y, event_id

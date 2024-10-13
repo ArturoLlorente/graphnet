@@ -263,7 +263,7 @@ class sensitivity_plots_jupyter:
             
         for i in range(len(df)):
             if tracks_in_dataset:
-                ax.plot(np.nan, np.nan, color = all_colour['track'][i], label = f'Tracks {df_labels_plotting[i]}')
+                ax.plot(np.nan, np.nan, color = all_colour['track'][i], label = f'{df_labels_plotting[i]}')#f'Tracks {df_labels_plotting[i]}')
             if cascades_in_dataset:
                 ax.plot(np.nan, np.nan, color = all_colour['cascade'][i], label = f'{df_labels_plotting[i]}')#f'Cascades {df_labels_plotting[i]}')
         if ylims is not None:
@@ -291,6 +291,7 @@ class sensitivity_plots_jupyter:
         
         energy_bins = []# , np.arange(0,3.1,0.05)
         for percentile in np.arange(0,102.5,2.5):
+        #for percentile in np.arange(0,101,1):
             energy_bins.append(np.percentile(np.log10(df[0]['energy']), percentile))
         
         # Calculate the residuals and bins
@@ -523,7 +524,11 @@ if __name__ == '__main__':
           #pd.read_csv(f'{cascades_icemix_path}/B_d64_4e_cascade.csv'), # retrained 4 epoch model2 benchmarket with the new test data
           #pd.read_csv(f'{cascades_icemix_path}/B_d64_5e_cascade.csv'), # retrained 5 epoch model2 benchmarket with the new test data
           #pd.read_csv(f'{cascades_icemix_path}/B_d64_6e_cascade.csv'), # retrained 6 epoch model2 benchmarket with the new test data
-          #pd.read_csv(f'{cascades_icemix_path}/B_d64_7e_cascade.csv'), # retrained 6 epoch model2 benchmarket with the new test data
+          #pd.read_csv(f'{cascades_icemix_path}/B_d64_7e_cascade.csv'), # retrained 7 epoch model2 benchmarket with the new test data
+          #pd.read_csv(f'{cascades_icemix_path}/B_d64_8e_cascade.csv'), # retrained 8 epoch model2 benchmarket with the new test data
+          #pd.read_csv(f'{cascades_icemix_path}/B_d64_9e_cascade.csv'), # retrained 9 epoch model2 benchmarket with the new test data
+          
+          
           #pd.read_csv(f'{cascades_icemix_path}/B_d64_4e_cascade_1e_track.csv'), # 4epochs on cascades and 1 epoch on tracks --> tracks
           
           #pd.read_csv(f'{cascades_icemix_path}/B_d64_4e_cascade_on_track.csv'), # 4 epochs cascades on tracks
@@ -565,14 +570,14 @@ if __name__ == '__main__':
           pd.read_csv(f'{cascades_tito_path}/model4_baseline_track_light.csv'),
           pd.read_csv(f'{cascades_tito_path}/model5_baseline_track_light.csv'),
           pd.read_csv(f'{cascades_tito_path}/model6_baseline_track_light.csv'),
-          
+          pd.read_csv(f'{cascades_tito_path}/stacking_baseline_track.csv'),          
           ]
     
     db_cascades = '/scratch/users/allorana/merged_sqlite_1505/meta_test/test_merged_meta.db'
     pulse_meta = False#'/scratch/users/allorana/merged_sqlite_1505/meta_test/merged_n_pulses.csv'
     db_tracks = '/scratch/users/allorana/northern_sqlite/old_files/dev_northern_tracks_muon_labels_v3_part_6.db'
     #db_tracks = '/scratch/users/allorana/northern_sqlite/old_files/dev_northern_tracks_muon_labels_v3_part_5.db' # ceph data
-    df_labels = ['model1', 'model2', 'model3', 'model4', 'model5', 'model6']
+    df_labels = ['model1', 'model2', 'model3', 'model4', 'model5', 'model6', 'stacking']
 
 
     dir_x = 'direction_x'
@@ -590,14 +595,14 @@ if __name__ == '__main__':
                                 ncols=2,
                                 include_residual_hist = False,
                                 cascades_in_dataset = False,
-                                tracks_in_dataset=True,
+                                tracks_in_dataset = True,
                                 compare_likelihood = True,
-                                #ylims = [-10, 2],
-                                #xlims=[10**4, 10**6.3],
+                                #ylims = [7, 16],
+                                #xlims=[10**4, 10**8],
                                 plot_pulses=pulse_meta,
                                 include_sigma=False,
-                                title=f'Median of {key} reconstruction TITO Model',
+                                title='Median of direction reconstruction $1^{st} solution$',
                                 include_spline_residual = False, # add/only
-                                savename = 'all_tracks_tito.png',
+                                savename = './plots/tito_stacking.png',
                                 font_size=13
                                 )

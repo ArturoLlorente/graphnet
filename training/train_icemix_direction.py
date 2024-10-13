@@ -215,10 +215,11 @@ if __name__ == "__main__":
         "collate_fn": collator_sequence_buckleting([0.5,0.9]),
         "fit": {"max_epochs": 1, "gpus": [0], "precision": '16-mixed'},
         "optimizer_class": AdamW,
-        "optimizer_kwargs": {"lr": 0.35e-5, "weight_decay": 0.05, "eps": 1e-7}, 
+        "optimizer_kwargs": {"lr": 1e-6, "weight_decay": 0.05, "eps": 1e-7}, 
         "scheduler_class": OneCycleLR, 
         #"scheduler_kwargs": {"max_lr": 0.5e-5, "pct_start": 0.01, "anneal_strategy": 'cos', "div_factor": 15, "final_div_factor": 15}, #cascades 5e
-        "scheduler_kwargs": {"max_lr": 0.35e-5, "pct_start": 0.01, "anneal_strategy": 'cos', "div_factor": 10, "final_div_factor": 10}, #cascades 6e, 7e, 8e
+        #"scheduler_kwargs": {"max_lr": 0.35e-5, "pct_start": 0.01, "anneal_strategy": 'cos', "div_factor": 10, "final_div_factor": 10}, #cascades 6e, 7e, 8e
+        "scheduler_kwargs": {"max_lr": 1e-6, "pct_start": 0.01, "anneal_strategy": 'cos', "div_factor": 10, "final_div_factor": 10}, #cascades 9e
         #"scheduler_kwargs": {"max_lr": 1e-5, "pct_start": 0.01, "anneal_strategy": 'cos', "div_factor": 25, "final_div_factor": 25}, #track 1e
         #"scheduler_kwargs": {"max_lr": 0.5e-5, "pct_start": 0.01, "anneal_strategy": 'cos', "div_factor": 10, "final_div_factor": 10}, #track 2e
         "scheduler_config": {"frequency": 1, "monitor": "val_loss", "interval": "step"},
@@ -231,16 +232,16 @@ if __name__ == "__main__":
     model_name = ["B_d32", "B_d64", "B_d32_4rel", "B+DynEdge_d64", "S+DynEdge_d32"]
     model_name = model_name[1]
     if not INFERENCE:
-        config["retrain_from_checkpoint"] = config['archive'] + '/retrain_B_d64_7e_cascade_state_dict.pth'
+        config["retrain_from_checkpoint"] = config['archive'] + '/retrain_B_d64_8e_cascade_state_dict.pth'
     
 
     run_name = (
-	f"retrain_{model_name}_8e_{config['event_type']}"
+	f"retrain_{model_name}_9e_{config['event_type']}"
     )
 
     torch.multiprocessing.set_sharing_strategy("file_system")
-    if INFERENCE and config["num_workers"] > 0:
-        torch.multiprocessing.set_start_method("spawn") # When using num_workers>1, otherwise it will crash after one epoch. Not needed for OneCycleLR, since it is only 1 epoch
+    #if INFERENCE and config["num_workers"] > 0:
+    #    torch.multiprocessing.set_start_method("spawn") # When using num_workers>1, otherwise it will crash after one epoch. Not needed for OneCycleLR, since it is only 1 epoch
     
 
     if config["event_type"] == "cascade":
@@ -368,8 +369,8 @@ if __name__ == "__main__":
     else:
         for model_i in [model_name]:#["B_d32", "B_d64", "B_d32_4rel", "B+DynEdge_d64", "S+DynEdge_d32"]: # Possibility to loop over all models
             all_results = []
-            checkpoint_path = config['archive'] + '/retrain_B_d32_4rel_2e_track_state_dict.pth'
-            run_name_pred = f"{model_i}_2e_{config['event_type']}"
+            checkpoint_path = config['archive'] + '/retrain_B_d64_9e_cascade_state_dict.pth'
+            run_name_pred = f"{model_i}_9e_{config['event_type']}"
             test_databases = all_databases
             factor = 0.6 # Factor for the batch size. This was 0.6 is set for H100 100GB
             pulse_breakpoints =     [0, 100,   200, 300, 500,  1000, 2000, 3000, 10000000]

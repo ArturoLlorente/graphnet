@@ -11,3 +11,4 @@ GNN
 from .model import Model
 from .standard_model import StandardModel, StandardModelPred
 from .standard_averaged_model import StandardAveragedModel
+from .standard_model_stacking import StandardModelStacking
